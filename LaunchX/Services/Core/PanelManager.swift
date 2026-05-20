@@ -94,6 +94,11 @@ class PanelManager: NSObject, NSWindowDelegate {
             .moveToActiveSpace, .fullScreenAuxiliary, .ignoresCycle,
         ]
 
+        // 切换到英文输入法
+        if let englishSource = TISCopyInputSourceForLanguage("en" as CFString)?.takeRetainedValue() {
+            TISSelectInputSource(englishSource)
+        }
+
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
 
