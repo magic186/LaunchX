@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.0
+- 新增 34 个系统设置面板快速跳转（声音、Wi-Fi、蓝牙、键盘、显示器等），搜索后回车直接打开对应设置页
+- 搜索面板弹出时自动切换到英文输入法
+- 剪贴板数据支持通过软链接自定义存储位置：
+  ```bash
+  mv ~/Library/Application\ Support/LaunchX/Clipboard ~/Documents/ClipboardData
+  ln -s ~/Documents/ClipboardData ~/Library/Application\ Support/LaunchX/Clipboard
+  ```
+
 ## v0.3.7
 优化面板上Claude切换provider/mcp/skills的交互
 
