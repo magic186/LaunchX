@@ -41,6 +41,7 @@ struct ToolsConfig: Codable {
     private static let defaultUtilitiesAddedKey = "DefaultUtilitiesAdded"
     private static let defaultSystemCommandsAddedKey = "DefaultSystemCommandsAdded"
     private static let coreAppsAddedKey = "CoreAppsAdded"
+    private static let defaultSettingsPanesAddedKey = "DefaultSettingsPanesAdded"
 
     /// 从 UserDefaults 加载配置（含自动迁移）
     static func load() -> ToolsConfig {
@@ -71,6 +72,13 @@ struct ToolsConfig: Codable {
                 needsSave = true
             }
 
+            // 检查是否需要添加默认系统设置面板
+            if !UserDefaults.standard.bool(forKey: defaultSettingsPanesAddedKey) {
+                config.addDefaultSettingsPanesIfNeeded()
+                UserDefaults.standard.set(true, forKey: defaultSettingsPanesAddedKey)
+                needsSave = true
+            }
+
             // 检查是否需要添加核心应用别名
             if !UserDefaults.standard.bool(forKey: ToolsConfig.coreAppsAddedKey) {
                 config.addCoreAppsIfNeeded()
@@ -93,6 +101,7 @@ struct ToolsConfig: Codable {
             config.addDefaultWebLinksIfNeeded()
             config.addDefaultUtilitiesIfNeeded()
             config.addDefaultSystemCommandsIfNeeded()
+            config.addDefaultSettingsPanesIfNeeded()
             config.addCoreAppsIfNeeded()
             // 先设置标记，避免循环
             UserDefaults.standard.set(true, forKey: ToolsConfig.migrationKey)
@@ -100,18 +109,20 @@ struct ToolsConfig: Codable {
             UserDefaults.standard.set(true, forKey: ToolsConfig.defaultWebLinksAddedKey)
             UserDefaults.standard.set(true, forKey: defaultUtilitiesAddedKey)
             UserDefaults.standard.set(true, forKey: defaultSystemCommandsAddedKey)
+            UserDefaults.standard.set(true, forKey: defaultSettingsPanesAddedKey)
             config.save()
             return config
         }
 
         // 3. 返回带有默认内容的配置
         var config = ToolsConfig()
-        config.tools = defaultWebLinks() + defaultUtilities() + defaultSystemCommands()
+        config.tools = defaultWebLinks() + defaultUtilities() + defaultSystemCommands() + defaultSettingsPanes()
         config.addCoreAppsIfNeeded()
         // 先设置标记，避免循环
         UserDefaults.standard.set(true, forKey: ToolsConfig.defaultWebLinksAddedKey)
         UserDefaults.standard.set(true, forKey: ToolsConfig.defaultUtilitiesAddedKey)
         UserDefaults.standard.set(true, forKey: ToolsConfig.defaultSystemCommandsAddedKey)
+        UserDefaults.standard.set(true, forKey: ToolsConfig.defaultSettingsPanesAddedKey)
         UserDefaults.standard.set(true, forKey: ToolsConfig.coreAppsAddedKey)
         config.save()
         return config
@@ -174,6 +185,18 @@ struct ToolsConfig: Codable {
                 !existingCommands.contains(command)
             {
                 tools.append(systemCommand)
+            }
+        }
+    }
+
+    /// 添加默认系统设置面板（如果尚未添加）
+    private mutating func addDefaultSettingsPanesIfNeeded() {
+        let defaults = ToolsConfig.defaultSettingsPanes()
+        let existingCommands = Set(tools.compactMap { $0.command })
+
+        for pane in defaults {
+            if let command = pane.command, !existingCommands.contains(command) {
+                tools.append(pane)
             }
         }
     }
@@ -267,6 +290,46 @@ struct ToolsConfig: Codable {
                 command: "restart",
                 alias: "restart"
             ),
+        ]
+    }
+
+    /// 默认系统设置面板列表
+    private static func defaultSettingsPanes() -> [ToolItem] {
+        return [
+            ToolItem.systemCommand(name: "系统设置 - 通用", command: "settings_general", alias: "general"),
+            ToolItem.systemCommand(name: "系统设置 - 外观", command: "settings_appearance", alias: "appearance"),
+            ToolItem.systemCommand(name: "系统设置 - 辅助功能", command: "settings_accessibility", alias: "accessibility"),
+            ToolItem.systemCommand(name: "系统设置 - 控制中心", command: "settings_control_center"),
+            ToolItem.systemCommand(name: "系统设置 - 桌面与程序坞", command: "settings_desktop"),
+            ToolItem.systemCommand(name: "系统设置 - 显示器", command: "settings_displays", alias: "display"),
+            ToolItem.systemCommand(name: "系统设置 - 墙纸", command: "settings_wallpaper", alias: "wallpaper"),
+            ToolItem.systemCommand(name: "系统设置 - 声音", command: "settings_sound", alias: "sound"),
+            ToolItem.systemCommand(name: "系统设置 - 网络", command: "settings_network", alias: "network"),
+            ToolItem.systemCommand(name: "系统设置 - Wi-Fi", command: "settings_wifi", alias: "wifi"),
+            ToolItem.systemCommand(name: "系统设置 - 蓝牙", command: "settings_bluetooth", alias: "bluetooth"),
+            ToolItem.systemCommand(name: "系统设置 - 电池", command: "settings_battery", alias: "battery"),
+            ToolItem.systemCommand(name: "系统设置 - 通知", command: "settings_notifications", alias: "notification"),
+            ToolItem.systemCommand(name: "系统设置 - 键盘", command: "settings_keyboard"),
+            ToolItem.systemCommand(name: "系统设置 - 触控板", command: "settings_trackpad", alias: "trackpad"),
+            ToolItem.systemCommand(name: "系统设置 - 鼠标", command: "settings_mouse", alias: "mouse"),
+            ToolItem.systemCommand(name: "系统设置 - 打印机与扫描仪", command: "settings_printers", alias: "printer"),
+            ToolItem.systemCommand(name: "系统设置 - 隐私与安全性", command: "settings_privacy", alias: "privacy"),
+            ToolItem.systemCommand(name: "系统设置 - 聚焦", command: "settings_spotlight", alias: "spotlight"),
+            ToolItem.systemCommand(name: "系统设置 - Apple ID", command: "settings_appleid", alias: "appleid"),
+            ToolItem.systemCommand(name: "系统设置 - 用户与群组", command: "settings_users", alias: "users"),
+            ToolItem.systemCommand(name: "系统设置 - 密码", command: "settings_passwords", alias: "passwords"),
+            ToolItem.systemCommand(name: "系统设置 - 互联网账户", command: "settings_internet_accounts"),
+            ToolItem.systemCommand(name: "系统设置 - 游戏中心", command: "settings_game_center"),
+            ToolItem.systemCommand(name: "系统设置 - 软件更新", command: "settings_software_update", alias: "update"),
+            ToolItem.systemCommand(name: "系统设置 - 日期与时间", command: "settings_date_time"),
+            ToolItem.systemCommand(name: "系统设置 - 语言与地区", command: "settings_language", alias: "language"),
+            ToolItem.systemCommand(name: "系统设置 - 共享", command: "settings_sharing", alias: "sharing"),
+            ToolItem.systemCommand(name: "系统设置 - 时间机器", command: "settings_time_machine", alias: "timemachine"),
+            ToolItem.systemCommand(name: "系统设置 - 启动磁盘", command: "settings_startup_disk"),
+            ToolItem.systemCommand(name: "系统设置 - 锁定屏幕", command: "settings_lock_screen"),
+            ToolItem.systemCommand(name: "系统设置 - 专注模式", command: "settings_focus", alias: "focus"),
+            ToolItem.systemCommand(name: "系统设置 - 屏幕使用时间", command: "settings_screen_time", alias: "screentime"),
+            ToolItem.systemCommand(name: "系统设置 - 储存空间", command: "settings_storage", alias: "storage"),
         ]
     }
 

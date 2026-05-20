@@ -22,6 +22,42 @@ class SystemCommandService {
         case shutdown = "shutdown"
         case restart = "restart"
 
+        // 系统设置面板
+        case settingsGeneral = "settings_general"
+        case settingsAppearance = "settings_appearance"
+        case settingsAccessibility = "settings_accessibility"
+        case settingsControlCenter = "settings_control_center"
+        case settingsDesktop = "settings_desktop"
+        case settingsDisplays = "settings_displays"
+        case settingsWallpaper = "settings_wallpaper"
+        case settingsSound = "settings_sound"
+        case settingsNetwork = "settings_network"
+        case settingsWiFi = "settings_wifi"
+        case settingsBluetooth = "settings_bluetooth"
+        case settingsBattery = "settings_battery"
+        case settingsNotifications = "settings_notifications"
+        case settingsKeyboard = "settings_keyboard"
+        case settingsTrackpad = "settings_trackpad"
+        case settingsMouse = "settings_mouse"
+        case settingsPrintersAndScanners = "settings_printers"
+        case settingsPrivacySecurity = "settings_privacy"
+        case settingsSpotlight = "settings_spotlight"
+        case settingsAppleID = "settings_appleid"
+        case settingsUsersAndGroups = "settings_users"
+        case settingsPasswords = "settings_passwords"
+        case settingsInternetAccounts = "settings_internet_accounts"
+        case settingsGameCenter = "settings_game_center"
+        case settingsSoftwareUpdate = "settings_software_update"
+        case settingsDateAndTime = "settings_date_time"
+        case settingsLanguageAndRegion = "settings_language"
+        case settingsShareAndAirdrop = "settings_sharing"
+        case settingsTimeMachine = "settings_time_machine"
+        case settingsStartupDisk = "settings_startup_disk"
+        case settingsLockScreen = "settings_lock_screen"
+        case settingsFocus = "settings_focus"
+        case settingsScreenTime = "settings_screen_time"
+        case settingsStorage = "settings_storage"
+
         /// 基础名称（静态）
         var baseName: String {
             switch self {
@@ -35,6 +71,40 @@ class SystemCommandService {
             case .lockScreen: return "锁屏"
             case .shutdown: return "关机"
             case .restart: return "重启电脑"
+            case .settingsGeneral: return "系统设置 - 通用"
+            case .settingsAppearance: return "系统设置 - 外观"
+            case .settingsAccessibility: return "系统设置 - 辅助功能"
+            case .settingsControlCenter: return "系统设置 - 控制中心"
+            case .settingsDesktop: return "系统设置 - 桌面与程序坞"
+            case .settingsDisplays: return "系统设置 - 显示器"
+            case .settingsWallpaper: return "系统设置 - 墙纸"
+            case .settingsSound: return "系统设置 - 声音"
+            case .settingsNetwork: return "系统设置 - 网络"
+            case .settingsWiFi: return "系统设置 - Wi-Fi"
+            case .settingsBluetooth: return "系统设置 - 蓝牙"
+            case .settingsBattery: return "系统设置 - 电池"
+            case .settingsNotifications: return "系统设置 - 通知"
+            case .settingsKeyboard: return "系统设置 - 键盘"
+            case .settingsTrackpad: return "系统设置 - 触控板"
+            case .settingsMouse: return "系统设置 - 鼠标"
+            case .settingsPrintersAndScanners: return "系统设置 - 打印机与扫描仪"
+            case .settingsPrivacySecurity: return "系统设置 - 隐私与安全性"
+            case .settingsSpotlight: return "系统设置 - 聚焦"
+            case .settingsAppleID: return "系统设置 - Apple ID"
+            case .settingsUsersAndGroups: return "系统设置 - 用户与群组"
+            case .settingsPasswords: return "系统设置 - 密码"
+            case .settingsInternetAccounts: return "系统设置 - 互联网账户"
+            case .settingsGameCenter: return "系统设置 - 游戏中心"
+            case .settingsSoftwareUpdate: return "系统设置 - 软件更新"
+            case .settingsDateAndTime: return "系统设置 - 日期与时间"
+            case .settingsLanguageAndRegion: return "系统设置 - 语言与地区"
+            case .settingsShareAndAirdrop: return "系统设置 - 通用 - 共享"
+            case .settingsTimeMachine: return "系统设置 - 通用 - 时间机器"
+            case .settingsStartupDisk: return "系统设置 - 通用 - 启动磁盘"
+            case .settingsLockScreen: return "系统设置 - 锁定屏幕"
+            case .settingsFocus: return "系统设置 - 专注模式"
+            case .settingsScreenTime: return "系统设置 - 屏幕使用时间"
+            case .settingsStorage: return "系统设置 - 通用 - 储存空间"
             }
         }
 
@@ -51,6 +121,7 @@ class SystemCommandService {
             case .lockScreen: return "锁定屏幕"
             case .shutdown: return "关闭电脑"
             case .restart: return "重新启动电脑"
+            default: return "打开\(baseName)"
             }
         }
 
@@ -62,6 +133,55 @@ class SystemCommandService {
             default:
                 return false
             }
+        }
+
+        /// 是否为系统设置面板
+        var isSettingsPane: Bool {
+            rawValue.hasPrefix("settings_")
+        }
+
+        /// 系统设置面板 URL
+        var settingsURL: URL? {
+            guard isSettingsPane else { return nil }
+            let urlString: String
+            switch self {
+            case .settingsGeneral: urlString = "x-apple.systempreferences:com.apple.General-Settings.extension"
+            case .settingsAppearance: urlString = "x-apple.systempreferences:com.apple.Appearance-Settings.extension"
+            case .settingsAccessibility: urlString = "x-apple.systempreferences:com.apple.Accessibility-Settings.extension"
+            case .settingsControlCenter: urlString = "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension"
+            case .settingsDesktop: urlString = "x-apple.systempreferences:com.apple.Desktop-Settings.extension"
+            case .settingsDisplays: urlString = "x-apple.systempreferences:com.apple.Displays-Settings.extension"
+            case .settingsWallpaper: urlString = "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
+            case .settingsSound: urlString = "x-apple.systempreferences:com.apple.Sound-Settings.extension"
+            case .settingsNetwork: urlString = "x-apple.systempreferences:com.apple.Network-Settings.extension"
+            case .settingsWiFi: urlString = "x-apple.systempreferences:com.apple.Wi-Fi-Settings.extension"
+            case .settingsBluetooth: urlString = "x-apple.systempreferences:com.apple.Bluetooth-Settings.extension"
+            case .settingsBattery: urlString = "x-apple.systempreferences:com.apple.Battery-Settings.extension"
+            case .settingsNotifications: urlString = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+            case .settingsKeyboard: urlString = "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"
+            case .settingsTrackpad: urlString = "x-apple.systempreferences:com.apple.Trackpad-Settings.extension"
+            case .settingsMouse: urlString = "x-apple.systempreferences:com.apple.Mouse-Settings.extension"
+            case .settingsPrintersAndScanners: urlString = "x-apple.systempreferences:com.apple.Print-Scan-Settings.extension"
+            case .settingsPrivacySecurity: urlString = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+            case .settingsSpotlight: urlString = "x-apple.systempreferences:com.apple.Spotlight-Settings.extension"
+            case .settingsAppleID: urlString = "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings"
+            case .settingsUsersAndGroups: urlString = "x-apple.systempreferences:com.apple.Users-Groups-Settings.extension"
+            case .settingsPasswords: urlString = "x-apple.systempreferences:com.apple.Passwords-Settings.extension"
+            case .settingsInternetAccounts: urlString = "x-apple.systempreferences:com.apple.Internet-Accounts-Settings.extension"
+            case .settingsGameCenter: urlString = "x-apple.systempreferences:com.apple.Game-Center-Settings.extension"
+            case .settingsSoftwareUpdate: urlString = "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
+            case .settingsDateAndTime: urlString = "x-apple.systempreferences:com.apple.Date-Time-Settings.extension"
+            case .settingsLanguageAndRegion: urlString = "x-apple.systempreferences:com.apple.Localization-Settings.extension"
+            case .settingsShareAndAirdrop: urlString = "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+            case .settingsTimeMachine: urlString = "x-apple.systempreferences:com.apple.Time-Machine-Settings.extension"
+            case .settingsStartupDisk: urlString = "x-apple.systempreferences:com.apple.Startup-Disk-Settings.extension"
+            case .settingsLockScreen: urlString = "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension"
+            case .settingsFocus: urlString = "x-apple.systempreferences:com.apple.Focus-Settings.extension"
+            case .settingsScreenTime: urlString = "x-apple.systempreferences:com.apple.Screen-Time-Settings.extension"
+            case .settingsStorage: urlString = "x-apple.systempreferences:com.apple.settings.Storage"
+            default: return nil
+            }
+            return URL(string: urlString)
         }
 
         /// SF Symbol 图标名称
@@ -77,6 +197,40 @@ class SystemCommandService {
             case .lockScreen: return "lock.fill"
             case .shutdown: return "power"
             case .restart: return "arrow.clockwise"
+            case .settingsGeneral: return "gear"
+            case .settingsAppearance: return "paintbrush"
+            case .settingsAccessibility: return "accessibility"
+            case .settingsControlCenter: return "switch.2"
+            case .settingsDesktop: return "menubar.dock.rectangle"
+            case .settingsDisplays: return "display"
+            case .settingsWallpaper: return "photo"
+            case .settingsSound: return "speaker.wave.3.fill"
+            case .settingsNetwork: return "network"
+            case .settingsWiFi: return "wifi"
+            case .settingsBluetooth: return "bluetooth"
+            case .settingsBattery: return "battery.100percent"
+            case .settingsNotifications: return "bell.badge.fill"
+            case .settingsKeyboard: return "keyboard"
+            case .settingsTrackpad: return "hand.point.up.braille"
+            case .settingsMouse: return "computermouse"
+            case .settingsPrintersAndScanners: return "printer"
+            case .settingsPrivacySecurity: return "hand.raised.fill"
+            case .settingsSpotlight: return "magnifyingglass"
+            case .settingsAppleID: return "person.crop.circle"
+            case .settingsUsersAndGroups: return "person.2"
+            case .settingsPasswords: return "key.fill"
+            case .settingsInternetAccounts: return "at"
+            case .settingsGameCenter: return "gamecontroller"
+            case .settingsSoftwareUpdate: return "arrow.triangle.2.circlepath"
+            case .settingsDateAndTime: return "clock"
+            case .settingsLanguageAndRegion: return "globe"
+            case .settingsShareAndAirdrop: return "shareplay"
+            case .settingsTimeMachine: return "clock.arrow.circlepath"
+            case .settingsStartupDisk: return "internaldrive"
+            case .settingsLockScreen: return "lock.display"
+            case .settingsFocus: return "moon.circle"
+            case .settingsScreenTime: return "hourglass"
+            case .settingsStorage: return "externaldrive"
             }
         }
     }
@@ -134,6 +288,17 @@ class SystemCommandService {
             return
         }
 
+        // 系统设置面板直接打开 URL
+        if id.isSettingsPane {
+            if let url = id.settingsURL {
+                NSWorkspace.shared.open(url)
+                completion(true)
+            } else {
+                completion(false)
+            }
+            return
+        }
+
         // 检查是否需要二次确认
         if id.requiresDoubleConfirmation {
             showDoubleConfirmation(for: id) { confirmed in
@@ -174,6 +339,8 @@ class SystemCommandService {
                 success = self.shutdown()
             case .restart:
                 success = self.restart()
+            default:
+                success = false
             }
 
             DispatchQueue.main.async {
