@@ -139,9 +139,9 @@ struct ClipboardItem: Identifiable, Codable, Hashable {
             }
             return cleaned
         case .image:
-            if let data = imageData {
+            if dataSize > 0 {
                 return
-                    "图片 (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)))"
+                    "图片 (\(ByteCountFormatter.string(fromByteCount: dataSize, countStyle: .file)))"
             }
             return "图片"
         case .file:

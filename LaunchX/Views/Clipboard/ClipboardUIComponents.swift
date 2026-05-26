@@ -142,7 +142,9 @@ class ClipboardCellView: NSTableCellView {
         switch item.contentType {
         case .image:
             // 图片类型显示预览
-            if let data = item.imageData, let image = NSImage(data: data) {
+            if let data = ClipboardService.shared.imageData(for: item),
+                let image = NSImage(data: data)
+            {
                 previewImageView.image = image
                 previewImageView.isHidden = false
                 contentLabel.isHidden = true

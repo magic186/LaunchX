@@ -127,7 +127,9 @@ extension ClipboardPanelViewController: NSTableViewDataSource, NSTableViewDelega
 
         // 图片类型根据实际图片尺寸计算高度
         if item.contentType == .image {
-            if let data = item.imageData, let image = NSImage(data: data) {
+            if let data = ClipboardService.shared.imageData(for: item),
+                let image = NSImage(data: data)
+            {
                 // 图片预览最大宽度200，最小宽度50
                 let maxPreviewWidth: CGFloat = 200
                 let aspectRatio = image.size.width / max(image.size.height, 1)
@@ -182,4 +184,3 @@ extension ClipboardPanelViewController: NSTableViewDataSource, NSTableViewDelega
         // 这样可以避免键盘导航时意外触发粘贴
     }
 }
-

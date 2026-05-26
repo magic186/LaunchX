@@ -338,6 +338,7 @@ final class ClipboardService: ObservableObject {
         // 检查重复（相同内容不重复添加，但更新时间）
         if let existingIndex = findDuplicateIndex(for: item) {
             var existing = items[existingIndex]
+            let existingDataSize = existing.dataSize
             // 创建新项目，更新时间和来源
             existing = ClipboardItem(
                 id: existing.id,
@@ -347,21 +348,27 @@ final class ClipboardService: ObservableObject {
                 textContent: existing.textContent,
                 rtfData: item.rtfData ?? existing.rtfData,
                 htmlData: item.htmlData ?? existing.htmlData,
-                imageData: existing.imageData ?? item.imageData,
+                imageData: existing.imageData,
                 filePaths: existing.filePaths,
                 colorHex: existing.colorHex,
                 sourceAppBundleId: item.sourceAppBundleId,
                 sourceAppName: item.sourceAppName
             )
+            if existing.contentType == .image {
+                existing.dataSize = max(existingDataSize, item.dataSize)
+            }
             items.remove(at: existingIndex)
             items.insert(existing, at: 0)
         } else {
-            items.insert(item, at: 0)
+            var itemToStore = item
 
             // 如果是图片，保存到磁盘
             if item.contentType == .image, let imageData = item.imageData {
                 saveImageToDisk(id: item.id, data: imageData)
+                itemToStore.imageData = nil
             }
+
+            items.insert(itemToStore, at: 0)
         }
 
         // 执行清理策略
@@ -478,6 +485,7 @@ final class ClipboardService: ObservableObject {
 
         // 移除原位置，插入到最前面
         var movedItem = items.remove(at: index)
+        let dataSize = movedItem.dataSize
         // 更新时间
         movedItem = ClipboardItem(
             id: movedItem.id,
@@ -493,6 +501,7 @@ final class ClipboardService: ObservableObject {
             sourceAppBundleId: movedItem.sourceAppBundleId,
             sourceAppName: movedItem.sourceAppName
         )
+        movedItem.dataSize = dataSize
         items.insert(movedItem, at: 0)
 
         // 防抖动保存并通知更新
@@ -571,6 +580,12 @@ final class ClipboardService: ObservableObject {
 
         // 更新 changeCount 避免重复记录
         lastChangeCount = pasteboard.changeCount
+    }
+
+    /// 按需读取图片数据，避免启动时把所有剪贴板图片常驻内存。
+    func imageData(for item: ClipboardItem) -> Data? {
+        guard item.contentType == .image else { return nil }
+        return item.imageData ?? loadImageFromDisk(id: item.id)
     }
 
     /// 模拟 Cmd+V 粘贴（公开方法）
@@ -740,16 +755,9 @@ final class ClipboardService: ObservableObject {
 
     private func loadItems() {
         guard let data = try? Data(contentsOf: itemsFileURL),
-            var loadedItems = try? JSONDecoder().decode([ClipboardItem].self, from: data)
+            let loadedItems = try? JSONDecoder().decode([ClipboardItem].self, from: data)
         else {
             return
-        }
-
-        // 加载图片数据
-        for i in 0..<loadedItems.count {
-            if loadedItems[i].contentType == .image {
-                loadedItems[i].imageData = loadImageFromDisk(id: loadedItems[i].id)
-            }
         }
 
         items = loadedItems

@@ -305,15 +305,15 @@ final class MemoryIndex {
                     self.files.append(item)
                 }
 
-                // Insert into name trie
-                self.insertIntoTrie(self.nameTrie, key: item.lowerName, item: item)
+                if self.shouldIndexInTrie(item) {
+                    self.insertIntoTrie(self.nameTrie, key: item.lowerName, item: item)
 
-                // Insert into pinyin trie
-                if let pinyin = item.pinyinFull {
-                    self.insertIntoTrie(self.pinyinTrie, key: pinyin, item: item)
-                }
-                if let acronym = item.pinyinAcronym {
-                    self.insertIntoTrie(self.pinyinTrie, key: acronym, item: item)
+                    if let pinyin = item.pinyinFull {
+                        self.insertIntoTrie(self.pinyinTrie, key: pinyin, item: item)
+                    }
+                    if let acronym = item.pinyinAcronym {
+                        self.insertIntoTrie(self.pinyinTrie, key: acronym, item: item)
+                    }
                 }
             }
 
@@ -370,13 +370,15 @@ final class MemoryIndex {
                 self.filesCount = self.files.count
             }
 
-            self.insertIntoTrie(self.nameTrie, key: item.lowerName, item: item)
+            if self.shouldIndexInTrie(item) {
+                self.insertIntoTrie(self.nameTrie, key: item.lowerName, item: item)
 
-            if let pinyin = item.pinyinFull {
-                self.insertIntoTrie(self.pinyinTrie, key: pinyin, item: item)
-            }
-            if let acronym = item.pinyinAcronym {
-                self.insertIntoTrie(self.pinyinTrie, key: acronym, item: item)
+                if let pinyin = item.pinyinFull {
+                    self.insertIntoTrie(self.pinyinTrie, key: pinyin, item: item)
+                }
+                if let acronym = item.pinyinAcronym {
+                    self.insertIntoTrie(self.pinyinTrie, key: acronym, item: item)
+                }
             }
 
             self.totalCount = self.allItems.count
@@ -735,6 +737,10 @@ final class MemoryIndex {
         }
 
         current.isEndOfWord = true
+    }
+
+    private func shouldIndexInTrie(_ item: SearchItem) -> Bool {
+        item.isApp || item.isDirectory || item.isWebLink || item.isUtility || item.isSystemCommand
     }
 
     private func searchTrie(_ root: TrieNode, prefix: String) -> [SearchItem]? {
