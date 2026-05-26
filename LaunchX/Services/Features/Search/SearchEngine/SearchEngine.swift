@@ -288,35 +288,35 @@ final class SearchEngine: ObservableObject {
             // Get total count first
             let stats = self.database.getStatistics()
             var allRecords: [FileRecord] = []
-            allRecords.reserveCapacity(stats.totalCount)
 
-            // Load all records in batches
+            // Load only apps/directories into memory. Ordinary files stay in SQLite.
             var offset = 0
-            while offset < stats.totalCount {
-                let batch = self.database.loadBatch(offset: offset, limit: batchSize)
+            while true {
+                let batch = self.database.loadMemoryIndexBatch(offset: offset, limit: batchSize)
+                if batch.isEmpty { break }
+
                 allRecords.append(contentsOf: batch)
                 offset += batch.count
 
-                print("SearchEngine: Loaded \(offset)/\(stats.totalCount) records...")
+                print("SearchEngine: Loaded \(offset) memory-index records...")
             }
 
-            // All records loaded, build memory index
-            print("SearchEngine: Loaded all \(allRecords.count) records, building memory index...")
+            print("SearchEngine: Loaded \(allRecords.count) memory-index records, building memory index...")
 
             self.memoryIndex.build(from: allRecords) { [weak self] in
                 guard let self = self else { return }
 
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    self.appsCount = self.memoryIndex.appsCount
-                    self.filesCount = self.memoryIndex.filesCount
-                    self.totalCount = self.memoryIndex.totalCount
+                    self.appsCount = stats.appsCount
+                    self.filesCount = stats.filesCount
+                    self.totalCount = stats.totalCount
                     self.indexingDuration = Date().timeIntervalSince(startTime)
                     self.lastIndexTime = Date()
                     self.isReady = true
 
                     print(
-                        "SearchEngine: Loaded index in \(String(format: "%.3f", self.indexingDuration))s"
+                        "SearchEngine: Loaded memory index in \(String(format: "%.3f", self.indexingDuration))s"
                     )
                 }
 
@@ -372,16 +372,17 @@ final class SearchEngine: ObservableObject {
                     completion: { [weak self] fileCount, duration in
                         guard let self = self else { return }
 
-                        // Load everything into memory index
-                        let records = self.database.loadAllSync()
+                        // Load only high-value records into memory; ordinary files stay in SQLite.
+                        let records = self.database.loadMemoryIndexAllSync()
                         self.memoryIndex.build(from: records) { [weak self] in
                             guard let self = self else { return }
 
                             Task { @MainActor [weak self] in
                                 guard let self = self else { return }
-                                self.appsCount = self.memoryIndex.appsCount
-                                self.filesCount = self.memoryIndex.filesCount
-                                self.totalCount = self.memoryIndex.totalCount
+                                let stats = self.database.getStatistics()
+                                self.appsCount = stats.appsCount
+                                self.filesCount = stats.filesCount
+                                self.totalCount = stats.totalCount
                                 self.indexingDuration = Date().timeIntervalSince(startTime)
                                 self.lastIndexTime = Date()
                                 self.isIndexing = false
@@ -664,16 +665,16 @@ final class SearchEngine: ObservableObject {
         )
 
         database.insert(record)
-        memoryIndex.add(record)
+        if record.isApp || record.isDirectory {
+            memoryIndex.add(record)
+        }
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.totalCount = self.memoryIndex.totalCount
-            if isApp {
-                self.appsCount = self.memoryIndex.appsCount
-            } else {
-                self.filesCount = self.memoryIndex.filesCount
-            }
+            let stats = self.database.getStatistics()
+            self.totalCount = stats.totalCount
+            self.appsCount = stats.appsCount
+            self.filesCount = stats.filesCount
         }
     }
 
@@ -683,9 +684,10 @@ final class SearchEngine: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.totalCount = self.memoryIndex.totalCount
-            self.appsCount = self.memoryIndex.appsCount
-            self.filesCount = self.memoryIndex.filesCount
+            let stats = self.database.getStatistics()
+            self.totalCount = stats.totalCount
+            self.appsCount = stats.appsCount
+            self.filesCount = stats.filesCount
         }
     }
 
@@ -745,12 +747,37 @@ final class SearchEngine: ObservableObject {
 
             var results = items.map { $0.toSearchResult() }
 
+            if text.count >= 2 && results.count < 30 {
+                let existingPaths = Set(results.map(\.path))
+                let fileRecords = database.searchOrdinaryFiles(
+                    query: text,
+                    excludedPaths: config.excludedPaths,
+                    excludedExtensions: Set(config.excludedExtensions),
+                    excludedFolderNames: Set(config.excludedFolderNames),
+                    excludingPaths: existingPaths,
+                    limit: 30 - results.count
+                )
+                results.append(contentsOf: fileRecords.map { searchResult(from: $0) })
+            }
+
             // 添加书签搜索结果
             let bookmarkResults = searchBookmarks(query: text)
             results.append(contentsOf: bookmarkResults)
 
             return results
         }
+    }
+
+    private func searchResult(from record: FileRecord) -> SearchResult {
+        let icon = NSWorkspace.shared.icon(forFile: record.path)
+        icon.size = NSSize(width: 32, height: 32)
+
+        return SearchResult(
+            name: record.name,
+            path: record.path,
+            icon: icon,
+            isDirectory: record.isDirectory
+        )
     }
 
     // MARK: - 书签搜索

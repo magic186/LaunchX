@@ -352,6 +352,150 @@ final class IndexDatabase {
         return records
     }
 
+    /// Load only records that should stay in memory (apps/directories).
+    func loadMemoryIndexBatch(offset: Int, limit: Int) -> [FileRecord] {
+        var records: [FileRecord] = []
+        records.reserveCapacity(limit)
+
+        dbQueue.sync { [weak self] in
+            guard let self = self else { return }
+
+            var stmt: OpaquePointer?
+            let sql = """
+                    SELECT * FROM files
+                    WHERE is_app = 1 OR is_directory = 1
+                    ORDER BY id
+                    LIMIT ? OFFSET ?
+                """
+
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let stmt = stmt {
+                    sqlite3_bind_int(stmt, 1, Int32(limit))
+                    sqlite3_bind_int(stmt, 2, Int32(offset))
+
+                    while sqlite3_step(stmt) == SQLITE_ROW {
+                        records.append(self.recordFromStatement(stmt))
+                    }
+
+                    sqlite3_finalize(stmt)
+                }
+            }
+        }
+
+        return records
+    }
+
+    /// Synchronously load memory-indexable records.
+    func loadMemoryIndexAllSync() -> [FileRecord] {
+        var records: [FileRecord] = []
+
+        dbQueue.sync { [weak self] in
+            guard let self = self else { return }
+
+            var stmt: OpaquePointer?
+            let sql = """
+                    SELECT * FROM files
+                    WHERE is_app = 1 OR is_directory = 1
+                    ORDER BY id
+                """
+
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let stmt = stmt {
+                    while sqlite3_step(stmt) == SQLITE_ROW {
+                        records.append(self.recordFromStatement(stmt))
+                    }
+
+                    sqlite3_finalize(stmt)
+                }
+            }
+        }
+
+        return records
+    }
+
+    /// Search ordinary files from SQLite instead of keeping them in the memory index.
+    func searchOrdinaryFiles(
+        query: String,
+        excludedPaths: [String],
+        excludedExtensions: Set<String>,
+        excludedFolderNames: Set<String>,
+        excludingPaths: Set<String>,
+        limit: Int
+    ) -> [FileRecord] {
+        guard !query.isEmpty, limit > 0 else { return [] }
+
+        var records: [FileRecord] = []
+        let lowerQuery = query.lowercased()
+        let containsPattern = "%\(lowerQuery)%"
+        let prefixPattern = "\(lowerQuery)%"
+        let fetchLimit = max(limit * 10, 100)
+
+        dbQueue.sync { [weak self] in
+            guard let self = self else { return }
+
+            var stmt: OpaquePointer?
+            let sql = """
+                    SELECT * FROM files
+                    WHERE is_app = 0
+                      AND is_directory = 0
+                      AND (
+                        lower(name) LIKE ?
+                        OR lower(path) LIKE ?
+                        OR lower(coalesce(pinyin_full, '')) LIKE ?
+                        OR lower(coalesce(pinyin_acronym, '')) LIKE ?
+                      )
+                    ORDER BY
+                      CASE
+                        WHEN lower(name) = ? THEN 0
+                        WHEN lower(name) LIKE ? THEN 1
+                        WHEN lower(path) LIKE ? THEN 2
+                        ELSE 3
+                      END,
+                      modified_date DESC
+                    LIMIT ?
+                """
+
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK,
+                  let stmt = stmt
+            else {
+                return
+            }
+
+            sqlite3_bind_text(stmt, 1, containsPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, containsPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, containsPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 4, prefixPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 5, lowerQuery, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 6, prefixPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 7, prefixPattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 8, Int32(fetchLimit))
+
+            while sqlite3_step(stmt) == SQLITE_ROW, records.count < limit {
+                let record = self.recordFromStatement(stmt)
+
+                if excludingPaths.contains(record.path) { continue }
+                if excludedPaths.contains(where: { record.path.hasPrefix($0) }) { continue }
+
+                if let ext = record.extension?.lowercased(),
+                   !ext.isEmpty,
+                   excludedExtensions.contains(ext) {
+                    continue
+                }
+
+                if !excludedFolderNames.isEmpty {
+                    let components = record.path.components(separatedBy: "/")
+                    if !excludedFolderNames.isDisjoint(with: components) { continue }
+                }
+
+                records.append(record)
+            }
+
+            sqlite3_finalize(stmt)
+        }
+
+        return records
+    }
+
     /// Check if a path exists in database
     func exists(path: String) -> Bool {
         var result = false
