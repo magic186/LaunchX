@@ -28,7 +28,7 @@ class SearchPanelViewController: NSViewController {
     var contentHeightConstraint: NSLayoutConstraint?
     var recentApps: [SearchResult] = []  // 最近使用的应用
     var selectedIndex: Int = 0
-    let searchEngine = SearchEngine.shared
+    lazy var searchEngine: SearchEngine = SearchEngine.shared
     var isShowingRecents: Bool = false  // 是否正在显示最近使用
 
     /// 是否处于任何扩展模式（IDE、文件夹、网页直达、实用工具、书签、2FA、Claude Code等）
@@ -256,10 +256,6 @@ class SearchPanelViewController: NSViewController {
         setupGlobalShortcutHint()
         setupKeyboardMonitor()
         setupNotificationObservers()
-
-        // SearchEngine handles indexing automatically on init
-        // Just trigger a reference to ensure it starts
-        _ = searchEngine.isReady
 
         // 加载最近使用的应用
         loadRecentApps()
