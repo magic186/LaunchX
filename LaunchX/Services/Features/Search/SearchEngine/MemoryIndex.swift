@@ -10,7 +10,7 @@ final class MemoryIndex {
     /// Optimized Trie node for prefix matching
     private class TrieNode {
         var children: [Character: TrieNode] = [:]
-        var itemIDs: Set<UInt32> = []
+        var itemPaths: Set<String> = []  // Only store paths, not full items
         var isEndOfWord = false
     }
 
@@ -33,7 +33,6 @@ final class MemoryIndex {
 
         // English word acronym (e.g., "vsc" for "Visual Studio Code")
         let wordAcronym: String?
-        var trieID: UInt32 = 0
 
         // Lazy-loaded icon
         private var _icon: NSImage?
@@ -289,9 +288,6 @@ final class MemoryIndex {
 
     private var nameTrie = TrieNode()
     private var pinyinTrie = TrieNode()
-    private var trieItems: [UInt32: SearchItem] = [:]
-    private var nextTrieItemID: UInt32 = 1
-    private var aliasOnlyTrieItemIDs: Set<UInt32> = []
 
     // 别名支持
     private var aliasMap: [String: String] = [:]  // alias (lowercase) -> path
@@ -320,7 +316,6 @@ final class MemoryIndex {
             self.files.removeAll()
             self.directories.removeAll()
             self.allItems.removeAll()
-            self.resetTrieItemRegistry()
             self.nameTrie = TrieNode()
             self.pinyinTrie = TrieNode()
 
@@ -364,9 +359,6 @@ final class MemoryIndex {
             // Sort files by modified date (recent first)
             self.files.sort { $0.modifiedDate > $1.modifiedDate }
 
-            // Alias mappings may have been loaded before the filesystem index.
-            self.rebuildAliasTrie()
-
             // Update statistics
             self.appsCount = self.apps.count
             self.filesCount = self.files.count
@@ -391,7 +383,6 @@ final class MemoryIndex {
         queue.async { [weak self] in
             guard let self = self else { return }
             let start = Date()
-            self.resetTrieItemRegistry()
             self.nameTrie = TrieNode()
             self.pinyinTrie = TrieNode()
             for item in self.allItems.values {
@@ -407,7 +398,6 @@ final class MemoryIndex {
                 // 顺便释放文件/应用类懒加载的图标缓存（定期内存回收）
                 item.releaseLazyIcon()
             }
-            self.rebuildAliasTrie()
             print(
                 "MemoryIndex: Trie rebuilt (\(self.totalCount) items) in "
                 + "\(String(format: "%.3f", Date().timeIntervalSince(start)))s [定期内存回收]"
@@ -496,15 +486,13 @@ final class MemoryIndex {
 
             // 从 Trie 中移除该 item 的所有 path 条目，并修剪空节点，
             // 避免 Trie 只增不减导致内存膨胀（曾导致 6 天累积 30+GB）。
-            self.trieRemove(self.nameTrie, key: item.lowerName, item: item)
+            self.trieRemove(self.nameTrie, key: item.lowerName, path: path)
             if let pinyin = item.pinyinFull {
-                self.trieRemove(self.pinyinTrie, key: pinyin, item: item)
+                self.trieRemove(self.pinyinTrie, key: pinyin, path: path)
             }
             if let acronym = item.pinyinAcronym {
-                self.trieRemove(self.pinyinTrie, key: acronym, item: item)
+                self.trieRemove(self.pinyinTrie, key: acronym, path: path)
             }
-            self.trieItems.removeValue(forKey: item.trieID)
-            item.trieID = 0
 
             self.totalCount = self.allItems.count
         }
@@ -578,9 +566,8 @@ final class MemoryIndex {
         var trieMatches: [SearchItem] = []
         trieMatches.reserveCapacity(min(trieCandidates.count, maxResults))
 
-        for itemID in trieCandidates {
-            guard let item = trieItems[itemID] else { continue }
-            let path = item.path
+        for path in trieCandidates {
+            guard let item = allItems[path] else { continue }
             guard !seenPaths.contains(path) else { continue }
 
             // Apply exclusions early to avoid unnecessary processing
@@ -787,32 +774,35 @@ final class MemoryIndex {
         }
     }
 
-    /// Optimized Trie candidate retrieval using compact integer identifiers.
-    private func getTrieCandidates(query: String) -> Set<UInt32> {
+    /// Optimized Trie candidate retrieval - returns paths directly
+    /// 高性能获取前缀匹配候选项，直接返回路径集合
+    private func getTrieCandidates(query: String) -> Set<String> {
         let lowerQuery = query.lowercased()
-        var candidateIDs = Set<UInt32>()
+        var candidatePaths = Set<String>()
 
-        // 从 name trie 获取候选项
-        if let itemIDs = searchTrieItemIDs(nameTrie, prefix: lowerQuery) {
-            candidateIDs.formUnion(itemIDs)
+        // 从 name trie 获取候选路径
+        if let paths = searchTrieForPaths(nameTrie, prefix: lowerQuery) {
+            candidatePaths.formUnion(paths)
         }
 
-        // 从 pinyin trie 获取候选项（仅 ASCII 查询）
+        // 从 pinyin trie 获取候选路径（仅 ASCII 查询）
         if query.allSatisfy({ $0.isASCII }) {
-            if let itemIDs = searchTrieItemIDs(pinyinTrie, prefix: lowerQuery) {
-                candidateIDs.formUnion(itemIDs)
+            if let paths = searchTrieForPaths(pinyinTrie, prefix: lowerQuery) {
+                candidatePaths.formUnion(paths)
             }
         }
 
-        // 从 alias trie 获取候选项
-        if let itemIDs = searchTrieItemIDs(aliasTrie, prefix: lowerQuery) {
-            candidateIDs.formUnion(itemIDs)
+        // 从 alias trie 获取候选路径
+        if let paths = searchTrieForPaths(aliasTrie, prefix: lowerQuery) {
+            candidatePaths.formUnion(paths)
         }
 
-        return candidateIDs
+        return candidatePaths
     }
 
-    private func searchTrieItemIDs(_ root: TrieNode, prefix: String) -> Set<UInt32>? {
+    /// Optimized Trie search that returns paths directly
+    /// 优化版Trie搜索，直接返回路径而不是完整对象
+    private func searchTrieForPaths(_ root: TrieNode, prefix: String) -> Set<String>? {
         var current = root
 
         for char in prefix {
@@ -822,13 +812,12 @@ final class MemoryIndex {
             current = next
         }
 
-        return current.itemIDs
+        return current.itemPaths
     }
 
     // MARK: - Trie Operations
 
     private func insertIntoTrie(_ root: TrieNode, key: String, item: SearchItem) {
-        let itemID = registerTrieItem(item)
         var current = root
 
         for char in key {
@@ -836,7 +825,7 @@ final class MemoryIndex {
                 current.children[char] = TrieNode()
             }
             current = current.children[char]!
-            current.itemIDs.insert(itemID)
+            current.itemPaths.insert(item.path)  // Only store path for memory efficiency
         }
 
         current.isEndOfWord = true
@@ -846,9 +835,10 @@ final class MemoryIndex {
         item.isApp || item.isDirectory || item.isWebLink || item.isUtility || item.isSystemCommand
     }
 
-    /// 从 Trie 移除指定项目，并自底向上修剪空节点。
+    /// 从 Trie 移除指定 path：沿 key 遍历，从每个经过节点的 itemPaths 删除该 path，
+    /// 并自底向上修剪「既无 itemPaths 又无 children」的空叶子节点，回收 TrieNode。
     /// 共用节点（仍有其他 item）不会变空，因此不会被误删。
-    private func trieRemove(_ root: TrieNode, key: String, item: SearchItem) {
+    private func trieRemove(_ root: TrieNode, key: String, path: String) {
         var stack: [(parent: TrieNode, char: Character, node: TrieNode)] = []
         var current = root
         for char in key {
@@ -857,10 +847,10 @@ final class MemoryIndex {
             current = next
         }
         for entry in stack {
-            entry.node.itemIDs.remove(item.trieID)
+            entry.node.itemPaths.remove(path)
         }
         while let (parent, char, node) = stack.popLast() {
-            guard node.itemIDs.isEmpty, node.children.isEmpty else { break }
+            guard node.itemPaths.isEmpty, node.children.isEmpty else { break }
             parent.children.removeValue(forKey: char)
         }
     }
@@ -875,7 +865,8 @@ final class MemoryIndex {
             current = next
         }
 
-        return current.itemIDs.compactMap { trieItems[$0] }
+        // Convert paths back to items
+        return current.itemPaths.compactMap { allItems[$0] }
     }
 
     // MARK: - 别名支持
@@ -1022,12 +1013,6 @@ final class MemoryIndex {
 
     /// 重建别名 Trie
     private func rebuildAliasTrie() {
-        for itemID in aliasOnlyTrieItemIDs {
-            if let item = trieItems.removeValue(forKey: itemID) {
-                item.trieID = 0
-            }
-        }
-        aliasOnlyTrieItemIDs.removeAll(keepingCapacity: true)
         aliasTrie = TrieNode()
 
         for (alias, path) in aliasMap {
@@ -1049,31 +1034,8 @@ final class MemoryIndex {
                     defaultUrl: toolInfo.defaultUrl
                 )
                 insertIntoTrie(aliasTrie, key: alias, item: item)
-                aliasOnlyTrieItemIDs.insert(item.trieID)
             }
         }
-    }
-
-    private func registerTrieItem(_ item: SearchItem) -> UInt32 {
-        if item.trieID != 0, trieItems[item.trieID] === item {
-            return item.trieID
-        }
-
-        precondition(nextTrieItemID != 0, "MemoryIndex Trie item identifier overflow")
-        let itemID = nextTrieItemID
-        nextTrieItemID &+= 1
-        item.trieID = itemID
-        trieItems[itemID] = item
-        return itemID
-    }
-
-    private func resetTrieItemRegistry() {
-        for item in trieItems.values {
-            item.trieID = 0
-        }
-        trieItems.removeAll(keepingCapacity: true)
-        aliasOnlyTrieItemIDs.removeAll(keepingCapacity: true)
-        nextTrieItemID = 1
     }
 
     /// 通过别名搜索（内部版本）
