@@ -438,12 +438,16 @@ final class SearchEngine: ObservableObject {
     }
 
     private func handleFSEvents(_ events: [FSEventsMonitor.FSEvent]) {
-        // 过滤掉位于 package（app / framework / plugin 等 bundle）内部的事件。
-        // 新安装 app 时 FSEvents（kFSEventStreamCreateFlagFileEvents）会逐个上报 bundle 内部文件
-        // （如 XXX.app/Contents/Info.plist、XXX.app/Contents/Resources/...），这些不是用户希望搜索的
-        // 独立条目。此处与全量扫描 FileIndexer.scan 的 .skipsPackageDescendants 行为保持一致：
-        // 保留 bundle 本身（如 XXX.app），跳过其内部文件。
-        let validEvents = events.filter { !isInsidePackage(path: $0.path) }
+        // 创建事件可直接过滤；修改和删除事件仍需进入处理流程，以清理历史脏索引。
+        let config = searchConfig
+        let validEvents = events.filter { event in
+            switch event.type {
+            case .created:
+                return !SearchIndexPathFilter.shouldExclude(path: event.path, config: config)
+            case .modified, .deleted, .renamed:
+                return true
+            }
+        }
         guard !validEvents.isEmpty else { return }
 
         // 如果批量处理被禁用，立即处理每个事件
@@ -518,17 +522,22 @@ final class SearchEngine: ObservableObject {
         // 分离路径列表
         var pathsToAdd: [String] = []
         var pathsToRemove: [String] = []
+        let config = searchConfig
 
         for event in fsEventQueue {
             switch event.type {
             case .created:
-                pathsToAdd.append(event.path)
+                if !SearchIndexPathFilter.shouldExclude(path: event.path, config: config) {
+                    pathsToAdd.append(event.path)
+                }
             case .deleted:
                 pathsToRemove.append(event.path)
             case .modified:
-                // 对于修改，先删除再添加
+                // 先删除旧记录；路径若已被排除，则不再重新添加。
                 pathsToRemove.append(event.path)
-                pathsToAdd.append(event.path)
+                if !SearchIndexPathFilter.shouldExclude(path: event.path, config: config) {
+                    pathsToAdd.append(event.path)
+                }
             case .renamed:
                 // 重命名作为创建/删除处理
                 break
@@ -569,7 +578,7 @@ final class SearchEngine: ObservableObject {
             if !recordsToAdd.isEmpty {
                 database.insertBatch(recordsToAdd) { success in
                     if success {
-                        for record in recordsToAdd {
+                        for record in recordsToAdd where record.isApp || record.isDirectory {
                             self.memoryIndex.add(record)
                         }
                         print("SearchEngine: Batch inserted \(recordsToAdd.count) records")
@@ -586,56 +595,13 @@ final class SearchEngine: ObservableObject {
         checkAndForceCheckpoint()
     }
 
-    /// 已知的 macOS bundle / package 扩展名。
-    /// 新安装 app 时 FSEvents 会枚举其内部文件，这些 bundle 内部文件不应进入索引。
-    private static let packageExtensions: Set<String> = [
-        "app",
-        "bundle",
-        "framework",
-        "plugin",
-        "kext",
-        "prefpane",
-        "osax",
-        "qlgenerator",
-        "mdimporter",
-        "action",
-        "menu",
-        "pkg",
-    ]
-
-    /// 判断路径是否位于 package（app / framework / plugin 等 bundle）内部。
-    ///
-    /// 与全量扫描 `FileIndexer.scan` 的 `.skipsPackageDescendants` 行为对齐：保留 bundle 本身
-    /// （如 `/Applications/X.app`），跳过其内部文件（如 `/Applications/X.app/Contents/Info.plist`）。
-    ///
-    /// - Parameter path: 待判断的文件路径
-    /// - Returns: 若路径的某个中间组件是已知 bundle 扩展名则返回 true（应跳过）
-    private func isInsidePackage(path: String) -> Bool {
-        let components = (path as NSString).pathComponents
-        guard components.count > 1 else { return false }
-        // 仅检查“中间”组件（不含最后一段）：最后一段若是 .app，那它是 bundle 本身，应保留
-        for component in components.dropLast() {
-            let ext = (component as NSString).pathExtension.lowercased()
-            if !ext.isEmpty, Self.packageExtensions.contains(ext) {
-                return true
-            }
-        }
-        return false
-    }
-
     /// 创建文件记录（辅助方法）
     private func createFileRecord(path: String) -> FileRecord? {
         let url = URL(fileURLWithPath: path)
 
-        // Skip if excluded
         let config = searchConfig
-        if config.excludedPaths.contains(where: { path.hasPrefix($0) }) { return nil }
-
-        let fileName = url.lastPathComponent
-        if config.excludedFolderNames.contains(fileName) { return nil }
-
+        guard !SearchIndexPathFilter.shouldExclude(path: path, config: config) else { return nil }
         let ext = url.pathExtension.lowercased()
-        if !ext.isEmpty && config.excludedExtensions.contains(ext) { return nil }
 
         // Create record
         guard
@@ -689,46 +655,7 @@ final class SearchEngine: ObservableObject {
     }
 
     private func addToIndex(path: String) {
-        let url = URL(fileURLWithPath: path)
-
-        // Skip if excluded
-        let config = searchConfig
-        if config.excludedPaths.contains(where: { path.hasPrefix($0) }) { return }
-
-        let fileName = url.lastPathComponent
-        if config.excludedFolderNames.contains(fileName) { return }
-
-        let ext = url.pathExtension.lowercased()
-        if !ext.isEmpty && config.excludedExtensions.contains(ext) { return }
-
-        // Create record
-        guard
-            let resourceValues = try? url.resourceValues(forKeys: [
-                .isDirectoryKey, .contentModificationDateKey,
-            ])
-        else { return }
-
-        let name = url.deletingPathExtension().lastPathComponent
-        let isApp = ext == "app"
-        let isDir = resourceValues.isDirectory ?? false
-
-        var pinyinFull: String? = nil
-        var pinyinAcronym: String? = nil
-        if name.utf8.count != name.count {
-            pinyinFull = name.pinyin.lowercased().replacingOccurrences(of: " ", with: "")
-            pinyinAcronym = name.pinyinAcronym.lowercased()
-        }
-
-        let record = FileRecord(
-            name: name,
-            path: path,
-            extension: ext,
-            isApp: isApp,
-            isDirectory: isDir,
-            pinyinFull: pinyinFull,
-            pinyinAcronym: pinyinAcronym,
-            modifiedDate: resourceValues.contentModificationDate
-        )
+        guard let record = createFileRecord(path: path) else { return }
 
         database.insert(record)
         if record.isApp || record.isDirectory {
