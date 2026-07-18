@@ -445,7 +445,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUFeedURL = "https://raw.githubusercontent.com/twotwoba/LaunchX/main/appcast.xml";
+				SUFeedURL = "https://raw.githubusercontent.com/magic186/LaunchX/main/appcast.xml";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -483,7 +483,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUFeedURL = "https://raw.githubusercontent.com/twotwoba/LaunchX/main/appcast.xml";
+				SUFeedURL = "https://raw.githubusercontent.com/magic186/LaunchX/main/appcast.xml";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;

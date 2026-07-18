@@ -42,7 +42,7 @@
 
 ### 下载安装
 
-1. 从 [Releases](https://github.com/twotwoba/LaunchX/releases) 下载最新的 `.dmg` 文件
+1. 从 [Releases](https://github.com/magic186/LaunchX/releases) 下载最新的 `.dmg` 文件
 2. 打开 DMG 文件，将 LaunchX 拖入 Applications 文件夹
 3. 首次启动时，按照引导授予必要权限
 

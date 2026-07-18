@@ -230,12 +230,12 @@ jobs:
                           <title>LaunchX</title>
                           <item>
                               <title>Version ${VERSION}</title>
-                              <sparkle:releaseNotesLink>https://github.com/twotwoba/LaunchX/releases/tag/${VERSION}</sparkle:releaseNotesLink>
+                              <sparkle:releaseNotesLink>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}</sparkle:releaseNotesLink>
                               <pubDate>$(date -u +"%a, %d %b %Y %H:%M:%S %z")</pubDate>
                               <sparkle:version>${{ github.run_number }}</sparkle:version>
                               <sparkle:shortVersionString>${VERSION#v}</sparkle:shortVersionString>
                               <enclosure
-                                  url="https://github.com/twotwoba/LaunchX/releases/download/${VERSION}/LaunchX-${VERSION}-arm64.dmg"
+                                  url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${VERSION}/LaunchX-${VERSION}-arm64.dmg"
                                   sparkle:os="macos"
                                   sparkle:version="${{ github.run_number }}"
                                   $SIGN_ATTRIBUTES

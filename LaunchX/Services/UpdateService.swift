@@ -45,7 +45,7 @@ extension UpdateService: SPUUpdaterDelegate {
     func feedURLString(for updater: SPUUpdater) -> String? {
         // 替换为你的 GitHub Releases 对应的 Appcast URL
         // 注意：Sparkle 需要一个 appcast.xml 文件来识别版本更新
-        return "https://raw.githubusercontent.com/twotwoba/LaunchX/main/appcast.xml"
+        return "https://raw.githubusercontent.com/magic186/LaunchX/main/appcast.xml"
     }
 
     /// 可以在这里自定义是否允许在特定情况下检查更新

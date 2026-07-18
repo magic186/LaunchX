@@ -4,12 +4,12 @@
         <title>LaunchX</title>
         <item>
             <title>Version v0.4.3</title>
-            <sparkle:releaseNotesLink>https://github.com/twotwoba/LaunchX/releases/tag/v0.4.3</sparkle:releaseNotesLink>
+            <sparkle:releaseNotesLink>https://github.com/magic186/LaunchX/releases/tag/v0.4.3</sparkle:releaseNotesLink>
             <pubDate>Sat, 18 Jul 2026 13:14:05 +0000</pubDate>
             <sparkle:version>6</sparkle:version>
             <sparkle:shortVersionString>0.4.3</sparkle:shortVersionString>
             <enclosure
-                url="https://github.com/twotwoba/LaunchX/releases/download/v0.4.3/LaunchX-v0.4.3-arm64.dmg"
+                url="https://github.com/magic186/LaunchX/releases/download/v0.4.3/LaunchX-v0.4.3-arm64.dmg"
                 sparkle:os="macos"
                 sparkle:version="6"
                 length="3714139"
