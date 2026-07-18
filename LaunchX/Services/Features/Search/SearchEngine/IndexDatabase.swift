@@ -57,14 +57,14 @@ final class IndexDatabase {
             return
         }
 
-        // Performance optimizations balanced for memory usage
-        // Target: support 600k+ files without excessive memory pressure on 8GB Macs
+        // Keep SQLite bounded: searches return small result sets and do not benefit enough
+        // from retaining hundreds of megabytes of database pages.
         executeSQL("PRAGMA journal_mode = WAL")  // Write-Ahead Logging for concurrency
         executeSQL("PRAGMA wal_autocheckpoint = 10000")  // 磁盘写入优化：减少 checkpoint 频率（默认 1000）
         executeSQL("PRAGMA synchronous = NORMAL")  // Balance safety and speed
-        executeSQL("PRAGMA cache_size = -64000")  // 64MB page cache (reduced from 128MB)
+        executeSQL("PRAGMA cache_size = -16384")  // 16MB page cache
         executeSQL("PRAGMA temp_store = MEMORY")  // Temp tables in memory
-        executeSQL("PRAGMA mmap_size = 268435456")  // 256MB memory-mapped I/O (reduced from 512MB)
+        executeSQL("PRAGMA mmap_size = 67108864")  // Cap memory-mapped I/O at 64MB
         executeSQL("PRAGMA locking_mode = NORMAL")  // Allow multiple readers
         executeSQL("PRAGMA page_size = 4096")  // Optimize page size
         executeSQL("PRAGMA optimize")  // Auto-optimize query planner
@@ -145,48 +145,66 @@ final class IndexDatabase {
         return true
     }
 
+    private func insertBatchOnQueue(_ records: [FileRecord]) -> Bool {
+        guard let stmt = insertStmt else { return false }
+        guard executeSQL("BEGIN TRANSACTION") else { return false }
+
+        var success = true
+        for record in records {
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+
+            sqlite3_bind_text(stmt, 1, record.name, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, record.path, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, record.extension, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 4, record.isApp ? 1 : 0)
+            sqlite3_bind_int(stmt, 5, record.isDirectory ? 1 : 0)
+            sqlite3_bind_text(stmt, 6, record.pinyinFull, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 7, record.pinyinAcronym, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_double(stmt, 8, record.modifiedDate?.timeIntervalSince1970 ?? 0)
+            sqlite3_bind_int64(stmt, 9, Int64(record.fileSize))
+
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                print("IndexDatabase: Failed to insert record: \(record.path)")
+                success = false
+            }
+        }
+
+        return executeSQL("COMMIT") && success
+    }
+
     // MARK: - Public API
 
     /// Insert multiple file records in a single transaction (very fast)
     func insertBatch(_ records: [FileRecord], completion: ((Bool) -> Void)? = nil) {
         dbQueue.async { [weak self] in
-            guard let self = self, let stmt = self.insertStmt else {
-                completion?(false)
-                return
-            }
-
-            self.executeSQL("BEGIN TRANSACTION")
-
-            for record in records {
-                sqlite3_reset(stmt)
-                sqlite3_clear_bindings(stmt)
-
-                sqlite3_bind_text(stmt, 1, record.name, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_text(stmt, 2, record.path, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_text(stmt, 3, record.extension, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_int(stmt, 4, record.isApp ? 1 : 0)
-                sqlite3_bind_int(stmt, 5, record.isDirectory ? 1 : 0)
-                sqlite3_bind_text(stmt, 6, record.pinyinFull, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_text(stmt, 7, record.pinyinAcronym, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_double(stmt, 8, record.modifiedDate?.timeIntervalSince1970 ?? 0)
-                sqlite3_bind_int64(stmt, 9, Int64(record.fileSize))
-
-                if sqlite3_step(stmt) != SQLITE_DONE {
-                    print("IndexDatabase: Failed to insert record: \(record.path)")
-                }
-            }
-
-            self.executeSQL("COMMIT")
+            let success = self?.insertBatchOnQueue(records) ?? false
 
             DispatchQueue.main.async {
-                completion?(true)
+                completion?(success)
             }
+        }
+    }
+
+    /// Insert a scanner batch with backpressure so pending record arrays cannot accumulate.
+    func insertBatchSync(_ records: [FileRecord]) -> Bool {
+        guard !records.isEmpty else { return true }
+        return dbQueue.sync { [weak self] in
+            self?.insertBatchOnQueue(records) ?? false
         }
     }
 
     /// Insert a single file record
     func insert(_ record: FileRecord) {
         insertBatch([record])
+    }
+
+    /// Ask SQLite to discard unneeded page-cache memory after index loading/building.
+    func releaseMemory() {
+        dbQueue.async { [weak self] in
+            guard let db = self?.db else { return }
+            sqlite3_db_release_memory(db)
+        }
     }
 
     /// Delete records by paths

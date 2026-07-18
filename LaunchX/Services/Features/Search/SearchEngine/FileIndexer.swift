@@ -131,8 +131,12 @@ final class FileIndexer {
                         continue
                     }
 
-                    // Get file attributes
-                    guard let record = self.createFileRecord(from: fileURL) else { continue }
+                    // Bound temporary Foundation allocations during very large scans.
+                    guard
+                        let record = autoreleasepool(invoking: {
+                            self.createFileRecord(from: fileURL)
+                        })
+                    else { continue }
 
                     batch.append(record)
                     totalScanned += 1
@@ -148,16 +152,19 @@ final class FileIndexer {
 
                     // Commit batch
                     if batch.count >= self.batchSize {
-                        let batchToInsert = batch
+                        if !self.database.insertBatchSync(batch) {
+                            print("FileIndexer: Failed to insert batch")
+                        }
                         batch.removeAll(keepingCapacity: true)
-                        self.database.insertBatch(batchToInsert)
                     }
                 }
             }
 
             // Insert remaining batch
             if !batch.isEmpty {
-                self.database.insertBatch(batch)
+                if !self.database.insertBatchSync(batch) {
+                    print("FileIndexer: Failed to insert final batch")
+                }
             }
 
             let duration = Date().timeIntervalSince(startTime)
@@ -220,7 +227,11 @@ final class FileIndexer {
                     // Only process .app bundles
                     guard fileURL.pathExtension == "app" else { continue }
 
-                    guard let record = self.createAppRecord(from: fileURL) else { continue }
+                    guard
+                        let record = autoreleasepool(invoking: {
+                            self.createAppRecord(from: fileURL)
+                        })
+                    else { continue }
 
                     batch.append(record)
                     totalScanned += 1
@@ -235,7 +246,9 @@ final class FileIndexer {
 
             // Insert all apps
             if !batch.isEmpty {
-                self.database.insertBatch(batch)
+                if !self.database.insertBatchSync(batch) {
+                    print("FileIndexer: Failed to insert application batch")
+                }
             }
 
             let duration = Date().timeIntervalSince(startTime)

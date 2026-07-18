@@ -319,6 +319,7 @@ final class SearchEngine: ObservableObject {
 
             self.memoryIndex.build(from: allRecords) { [weak self] in
                 guard let self = self else { return }
+                self.database.releaseMemory()
 
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
@@ -390,6 +391,7 @@ final class SearchEngine: ObservableObject {
                         let records = self.database.loadMemoryIndexAllSync()
                         self.memoryIndex.build(from: records) { [weak self] in
                             guard let self = self else { return }
+                            self.database.releaseMemory()
 
                             Task { @MainActor [weak self] in
                                 guard let self = self else { return }
@@ -718,6 +720,14 @@ final class SearchEngine: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.database.idleCheckpoint()
         }
+    }
+
+    /// Drop query results, file icons and SQLite pages that can be recreated on demand.
+    func releaseTransientMemory() {
+        searchCache.clear()
+        cachedDefaultSearchWebLinks = nil
+        memoryIndex.releaseLazyIcons()
+        database.releaseMemory()
     }
 
     /// 检查并强制执行 checkpoint（当 WAL 文件过大时）

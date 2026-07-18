@@ -9,7 +9,7 @@ final class SearchCache {
     }
 
     private var cache: [String: CachedResult] = [:]
-    private let maxCacheSize = 50
+    private let maxCacheSize = 15
     private let lock = NSLock()
 
     /// Retrieve cached results for a specific query

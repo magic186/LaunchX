@@ -405,6 +405,16 @@ final class MemoryIndex {
         }
     }
 
+    /// Release icons loaded during searches without rebuilding the index.
+    func releaseLazyIcons() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            for item in self.allItems.values {
+                item.releaseLazyIcon()
+            }
+        }
+    }
+
     /// Add a single item to index (用于实时更新)
     func add(_ record: FileRecord) {
         // Ordinary files are searched from SQLite and must never accumulate in memory.

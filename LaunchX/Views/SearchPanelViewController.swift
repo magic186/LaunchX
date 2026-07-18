@@ -129,6 +129,7 @@ class SearchPanelViewController: NSViewController {
     var generatedUUIDs: [String] = []  // 生成的 UUID 列表
     var searchDebounceWorkItem: DispatchWorkItem?  // 搜索防抖（合并快速连续输入）
     var searchGeneration: UInt = 0  // 异步搜索代际，用于丢弃过期结果
+    var hasPerformedIndexedSearch = false
 
     var uuidDebounceWorkItem: DispatchWorkItem?  // UUID 生成防抖
 
@@ -332,7 +333,12 @@ class SearchPanelViewController: NSViewController {
 
         // Register for panel hide callback
         PanelManager.shared.onWillHide = { [weak self] in
-            self?.resetState()
+            guard let self = self else { return }
+            if self.hasPerformedIndexedSearch {
+                self.searchEngine.releaseTransientMemory()
+                self.hasPerformedIndexedSearch = false
+            }
+            self.resetState()
         }
     }
 

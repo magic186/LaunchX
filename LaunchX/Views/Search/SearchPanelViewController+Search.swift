@@ -123,6 +123,7 @@ extension SearchPanelViewController {
     private func executeSearchAsync(query: String) {
         searchGeneration &+= 1
         let generation = searchGeneration
+        hasPerformedIndexedSearch = true
 
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
