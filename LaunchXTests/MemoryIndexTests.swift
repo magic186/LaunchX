@@ -3,7 +3,7 @@ import Testing
 @testable import LaunchX
 
 struct MemoryIndexTests {
-    @Test func identityBackedTrieReturnsAllSharedPrefixMatches() async {
+    @Test func compactIDTrieReturnsAllSharedPrefixMatches() async {
         let index = MemoryIndex()
         await build(
             index,
@@ -36,7 +36,7 @@ struct MemoryIndexTests {
         #expect(paths == ["/tmp/Alpine"])
     }
 
-    @Test func pinyinTrieDeduplicatesTheSameItemByIdentity() async {
+    @Test func pinyinTrieDeduplicatesTheSameCompactID() async {
         let index = MemoryIndex()
         await build(
             index,
@@ -53,6 +53,26 @@ struct MemoryIndexTests {
         let results = index.search(query: "c")
 
         #expect(results.map(\.path) == ["/tmp/ChineseName"])
+    }
+
+    @Test func rebuildingFilesystemIndexKeepsAliasTrieItemsRegistered() async {
+        let index = MemoryIndex()
+        let tool = MemoryIndex.AliasToolInfo(
+            name: "Example Search",
+            path: "https://example.com?q={query}",
+            isWebLink: true,
+            iconData: nil,
+            alias: "ex",
+            supportsQuery: true,
+            defaultUrl: "https://example.com"
+        )
+
+        index.setAliasMapWithTools(["ex": tool])
+        await build(index, records: [directory(name: "Documents", path: "/tmp/Documents")])
+
+        let paths = Set(index.search(query: "e").map(\.path))
+
+        #expect(paths.contains("https://example.com?q={query}"))
     }
 
     private func build(_ index: MemoryIndex, records: [FileRecord]) async {
