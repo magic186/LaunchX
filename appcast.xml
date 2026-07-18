@@ -3,16 +3,16 @@
     <channel>
         <title>LaunchX</title>
         <item>
-            <title>Version v0.4.4</title>
-            <sparkle:releaseNotesLink>https://github.com/magic186/LaunchX/releases/tag/v0.4.4</sparkle:releaseNotesLink>
-            <pubDate>Sat, 18 Jul 2026 13:53:46 +0000</pubDate>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.4.4</sparkle:shortVersionString>
+            <title>Version v0.4.5</title>
+            <sparkle:releaseNotesLink>https://github.com/magic186/LaunchX/releases/tag/v0.4.5</sparkle:releaseNotesLink>
+            <pubDate>Sat, 18 Jul 2026 14:08:44 +0000</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.4.5</sparkle:shortVersionString>
             <enclosure
-                url="https://github.com/magic186/LaunchX/releases/download/v0.4.4/LaunchX-v0.4.4-arm64.dmg"
+                url="https://github.com/magic186/LaunchX/releases/download/v0.4.5/LaunchX-v0.4.5-arm64.dmg"
                 sparkle:os="macos"
-                sparkle:version="7"
-                length="3715460"
+                sparkle:version="8"
+                length="3718149"
                 type="application/octet-stream" />
         </item>
     </channel>
