@@ -10,12 +10,12 @@ final class MemoryIndex {
     /// Optimized Trie node for prefix matching
     private class TrieNode {
         var children: [Character: TrieNode] = [:]
-        var itemPaths: Set<String> = []  // Only store paths, not full items
+        var items: Set<SearchItem> = []
         var isEndOfWord = false
     }
 
     /// Indexed search item (lightweight, stored in memory)
-    final class SearchItem {
+    final class SearchItem: Hashable {
         let name: String
         let lowerName: String
         let path: String
@@ -33,6 +33,14 @@ final class MemoryIndex {
 
         // English word acronym (e.g., "vsc" for "Visual Studio Code")
         let wordAcronym: String?
+
+        static func == (lhs: SearchItem, rhs: SearchItem) -> Bool {
+            lhs === rhs
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(ObjectIdentifier(self))
+        }
 
         // Lazy-loaded icon
         private var _icon: NSImage?
@@ -486,12 +494,12 @@ final class MemoryIndex {
 
             // 从 Trie 中移除该 item 的所有 path 条目，并修剪空节点，
             // 避免 Trie 只增不减导致内存膨胀（曾导致 6 天累积 30+GB）。
-            self.trieRemove(self.nameTrie, key: item.lowerName, path: path)
+            self.trieRemove(self.nameTrie, key: item.lowerName, item: item)
             if let pinyin = item.pinyinFull {
-                self.trieRemove(self.pinyinTrie, key: pinyin, path: path)
+                self.trieRemove(self.pinyinTrie, key: pinyin, item: item)
             }
             if let acronym = item.pinyinAcronym {
-                self.trieRemove(self.pinyinTrie, key: acronym, path: path)
+                self.trieRemove(self.pinyinTrie, key: acronym, item: item)
             }
 
             self.totalCount = self.allItems.count
@@ -566,8 +574,8 @@ final class MemoryIndex {
         var trieMatches: [SearchItem] = []
         trieMatches.reserveCapacity(min(trieCandidates.count, maxResults))
 
-        for path in trieCandidates {
-            guard let item = allItems[path] else { continue }
+        for item in trieCandidates {
+            let path = item.path
             guard !seenPaths.contains(path) else { continue }
 
             // Apply exclusions early to avoid unnecessary processing
@@ -774,35 +782,32 @@ final class MemoryIndex {
         }
     }
 
-    /// Optimized Trie candidate retrieval - returns paths directly
-    /// 高性能获取前缀匹配候选项，直接返回路径集合
-    private func getTrieCandidates(query: String) -> Set<String> {
+    /// Optimized Trie candidate retrieval using identity-hashed item references.
+    private func getTrieCandidates(query: String) -> Set<SearchItem> {
         let lowerQuery = query.lowercased()
-        var candidatePaths = Set<String>()
+        var candidates = Set<SearchItem>()
 
-        // 从 name trie 获取候选路径
-        if let paths = searchTrieForPaths(nameTrie, prefix: lowerQuery) {
-            candidatePaths.formUnion(paths)
+        // 从 name trie 获取候选项
+        if let items = searchTrieItems(nameTrie, prefix: lowerQuery) {
+            candidates.formUnion(items)
         }
 
-        // 从 pinyin trie 获取候选路径（仅 ASCII 查询）
+        // 从 pinyin trie 获取候选项（仅 ASCII 查询）
         if query.allSatisfy({ $0.isASCII }) {
-            if let paths = searchTrieForPaths(pinyinTrie, prefix: lowerQuery) {
-                candidatePaths.formUnion(paths)
+            if let items = searchTrieItems(pinyinTrie, prefix: lowerQuery) {
+                candidates.formUnion(items)
             }
         }
 
-        // 从 alias trie 获取候选路径
-        if let paths = searchTrieForPaths(aliasTrie, prefix: lowerQuery) {
-            candidatePaths.formUnion(paths)
+        // 从 alias trie 获取候选项
+        if let items = searchTrieItems(aliasTrie, prefix: lowerQuery) {
+            candidates.formUnion(items)
         }
 
-        return candidatePaths
+        return candidates
     }
 
-    /// Optimized Trie search that returns paths directly
-    /// 优化版Trie搜索，直接返回路径而不是完整对象
-    private func searchTrieForPaths(_ root: TrieNode, prefix: String) -> Set<String>? {
+    private func searchTrieItems(_ root: TrieNode, prefix: String) -> Set<SearchItem>? {
         var current = root
 
         for char in prefix {
@@ -812,7 +817,7 @@ final class MemoryIndex {
             current = next
         }
 
-        return current.itemPaths
+        return current.items
     }
 
     // MARK: - Trie Operations
@@ -825,7 +830,7 @@ final class MemoryIndex {
                 current.children[char] = TrieNode()
             }
             current = current.children[char]!
-            current.itemPaths.insert(item.path)  // Only store path for memory efficiency
+            current.items.insert(item)
         }
 
         current.isEndOfWord = true
@@ -835,10 +840,9 @@ final class MemoryIndex {
         item.isApp || item.isDirectory || item.isWebLink || item.isUtility || item.isSystemCommand
     }
 
-    /// 从 Trie 移除指定 path：沿 key 遍历，从每个经过节点的 itemPaths 删除该 path，
-    /// 并自底向上修剪「既无 itemPaths 又无 children」的空叶子节点，回收 TrieNode。
+    /// 从 Trie 移除指定项目，并自底向上修剪空节点。
     /// 共用节点（仍有其他 item）不会变空，因此不会被误删。
-    private func trieRemove(_ root: TrieNode, key: String, path: String) {
+    private func trieRemove(_ root: TrieNode, key: String, item: SearchItem) {
         var stack: [(parent: TrieNode, char: Character, node: TrieNode)] = []
         var current = root
         for char in key {
@@ -847,10 +851,10 @@ final class MemoryIndex {
             current = next
         }
         for entry in stack {
-            entry.node.itemPaths.remove(path)
+            entry.node.items.remove(item)
         }
         while let (parent, char, node) = stack.popLast() {
-            guard node.itemPaths.isEmpty, node.children.isEmpty else { break }
+            guard node.items.isEmpty, node.children.isEmpty else { break }
             parent.children.removeValue(forKey: char)
         }
     }
@@ -865,8 +869,7 @@ final class MemoryIndex {
             current = next
         }
 
-        // Convert paths back to items
-        return current.itemPaths.compactMap { allItems[$0] }
+        return Array(current.items)
     }
 
     // MARK: - 别名支持
