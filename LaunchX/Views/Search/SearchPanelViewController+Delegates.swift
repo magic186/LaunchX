@@ -66,6 +66,12 @@ extension SearchPanelViewController: NSTextFieldDelegate {
             return
         }
 
+        // Codex 模式：搜索过滤
+        if isInCodexMode {
+            filterCodexItems(query: query)
+            return
+        }
+
         // 普通模式：搜索应用和文件
         performSearch(query)
 

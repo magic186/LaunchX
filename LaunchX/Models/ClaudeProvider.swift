@@ -46,6 +46,7 @@ struct ClaudeProvider: Identifiable, Codable, Equatable {
     var isCurrent: Bool
     var createdAt: Date
     var sortIndex: Int
+    var apps: Set<AppTarget>
 
     init(
         id: UUID = UUID(),
@@ -58,7 +59,8 @@ struct ClaudeProvider: Identifiable, Codable, Equatable {
         iconColor: String? = nil,
         isCurrent: Bool = false,
         createdAt: Date = Date(),
-        sortIndex: Int = 0
+        sortIndex: Int = 0,
+        apps: Set<AppTarget> = [.claude]
     ) {
         self.id = id
         self.name = name
@@ -71,6 +73,45 @@ struct ClaudeProvider: Identifiable, Codable, Equatable {
         self.isCurrent = isCurrent
         self.createdAt = createdAt
         self.sortIndex = sortIndex
+        self.apps = apps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, settingsConfig, category, websiteUrl, notes
+        case icon, iconColor, isCurrent, createdAt, sortIndex, apps
+    }
+
+    // 向后兼容：apps 字段缺失时默认为 [.claude]
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        settingsConfig = try container.decode([String: String].self, forKey: .settingsConfig)
+        category = try container.decode(ClaudeProviderCategory.self, forKey: .category)
+        websiteUrl = try container.decodeIfPresent(String.self, forKey: .websiteUrl)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        iconColor = try container.decodeIfPresent(String.self, forKey: .iconColor)
+        isCurrent = try container.decode(Bool.self, forKey: .isCurrent)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        sortIndex = try container.decode(Int.self, forKey: .sortIndex)
+        apps = (try? container.decode(Set<AppTarget>.self, forKey: .apps)) ?? [.claude]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(settingsConfig, forKey: .settingsConfig)
+        try container.encode(category, forKey: .category)
+        try container.encodeIfPresent(websiteUrl, forKey: .websiteUrl)
+        try container.encodeIfPresent(notes, forKey: .notes)
+        try container.encodeIfPresent(icon, forKey: .icon)
+        try container.encodeIfPresent(iconColor, forKey: .iconColor)
+        try container.encode(isCurrent, forKey: .isCurrent)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(sortIndex, forKey: .sortIndex)
+        try container.encode(apps, forKey: .apps)
     }
 
     /// API Key（优先 ANTHROPIC_AUTH_TOKEN，备选 ANTHROPIC_API_KEY）

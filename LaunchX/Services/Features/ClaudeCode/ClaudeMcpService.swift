@@ -60,7 +60,7 @@ final class ClaudeMcpService: ObservableObject {
         servers.append(server)
         try persistData()
         if server.isEnabled {
-            try syncToClaude()
+            try syncAll()
         }
         return nil
     }
@@ -71,7 +71,7 @@ final class ClaudeMcpService: ObservableObject {
         servers[index] = server
         try persistData()
         if server.isEnabled {
-            try syncToClaude()
+            try syncAll()
         }
     }
 
@@ -79,7 +79,7 @@ final class ClaudeMcpService: ObservableObject {
     func deleteServer(_ server: McpServer) throws {
         servers.removeAll { $0.id == server.id }
         try persistData()
-        try syncToClaude()
+        try syncAll()
     }
 
     // MARK: - 启用/禁用
@@ -89,10 +89,21 @@ final class ClaudeMcpService: ObservableObject {
         guard let index = servers.firstIndex(where: { $0.id == server.id }) else { return }
         servers[index].isEnabled.toggle()
         try persistData()
-        try syncToClaude()
+        try syncAll()
     }
 
-    // MARK: - 同步到 Claude Code
+    // MARK: - 同步
+
+    /// 按各服务器的 apps 字段分发同步
+    func syncAll() throws {
+        // 收集需要同步到 Claude 的服务器
+        let claudeServers = servers.filter { $0.isEnabled && $0.apps.contains(.claude) }
+        // 收集需要同步到 Codex 的服务器
+        let codexServers = servers.filter { $0.isEnabled && $0.apps.contains(.codex) }
+
+        try syncToClaude(servers: claudeServers)
+        try syncToCodex(servers: codexServers)
+    }
 
     /// 读取 ~/.claude.json
     func readClaudeJson() -> [String: Any]? {
@@ -105,14 +116,12 @@ final class ClaudeMcpService: ObservableObject {
         return json
     }
 
-    /// 将所有启用的 MCP 服务器同步到 ~/.claude.json
-    func syncToClaude() throws {
+    /// 将指定的 MCP 服务器同步到 ~/.claude.json
+    private func syncToClaude(servers: [McpServer]) throws {
         var config = readClaudeJson() ?? [:]
 
-        // 构建启用的 MCP 服务器配置
         var mcpServers: [String: Any] = [:]
-        for server in servers where server.isEnabled {
-            // 将 [String: AnyCodable] 转为 [String: Any]
+        for server in servers {
             var serverConfig: [String: Any] = [:]
             for (key, value) in server.serverConfig {
                 serverConfig[key] = value.value
@@ -125,11 +134,9 @@ final class ClaudeMcpService: ObservableObject {
         let jsonData = try JSONSerialization.data(
             withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
 
-        // 原子写入
         let tempPath = claudeJsonPath.deletingLastPathComponent()
             .appendingPathComponent(".tmp_claude_json_\(UUID().uuidString)")
         do {
-            // 确保目录存在
             let dir = claudeJsonPath.deletingLastPathComponent()
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -145,6 +152,62 @@ final class ClaudeMcpService: ObservableObject {
         }
     }
 
+    /// 将指定的 MCP 服务器同步到 ~/.codex/config.toml
+    /// Codex MCP TOML 格式:
+    ///   [mcp_servers.name]
+    ///   command = "npx"
+    ///   args = ["-y", "server"]
+    ///   env = { "KEY" = "value" }
+    private func syncToCodex(servers: [McpServer]) throws {
+        let doc = store.readCodexConfig() ?? TomlDocument()
+
+        // 移除旧的 mcp_servers 段
+        let existingSections = doc.sectionsWithPrefix("mcp_servers.")
+        for section in existingSections {
+            doc.removeSection(section)
+        }
+
+        // 写入新的 mcp_servers 段
+        for server in servers {
+            let section = "mcp_servers.\(server.name)"
+            for (key, value) in server.serverConfig {
+                let tomlValue = anyCodableToToml(value)
+                doc.setRaw(key, value: tomlValue, in: section)
+            }
+        }
+
+        try store.ensureCodexDir()
+        try store.writeCodexConfig(doc)
+    }
+
+    /// 将 AnyCodable 值转换为 TOML 格式字符串
+    private func anyCodableToToml(_ value: AnyCodable) -> String {
+        if let str = value.stringValue {
+            return str.tomlQuoted
+        }
+        if let bool = value.value as? Bool {
+            return bool ? "true" : "false"
+        }
+        if let num = value.value as? Int {
+            return String(num)
+        }
+        if let num = value.value as? Double {
+            return String(num)
+        }
+        if let dict = value.value as? [String: Any] {
+            let items = dict.map { k, v in
+                "\(k) = \(anyCodableToToml(AnyCodable(v)))"
+            }.joined(separator: ", ")
+            return "{ \(items) }"
+        }
+        let arr = value.arrayValue
+        if !arr.isEmpty {
+            let items = arr.map { anyCodableToToml($0) }.joined(separator: ", ")
+            return "[\(items)]"
+        }
+        return String(describing: value.value).tomlQuoted
+    }
+
     // MARK: - 导入
 
     /// 从 ~/.claude.json 导入 MCP
@@ -157,10 +220,14 @@ final class ClaudeMcpService: ObservableObject {
 
         var imported = 0
         for (name, serverConfig) in mcpServers {
-            // 跳过已存在的
-            if servers.contains(where: { $0.name == name }) { continue }
+            if servers.contains(where: { $0.name == name }) {
+                // 已存在，仅添加 .claude 到 apps
+                if let idx = servers.firstIndex(where: { $0.name == name }) {
+                    servers[idx].apps.insert(.claude)
+                }
+                continue
+            }
 
-            // 转换为 [String: AnyCodable]
             var config: [String: AnyCodable] = [:]
             if let dict = serverConfig as? [String: Any] {
                 for (key, value) in dict {
@@ -168,13 +235,55 @@ final class ClaudeMcpService: ObservableObject {
                 }
             }
 
-            // 验证
             if validateConfig(config) != nil { continue }
 
             let server = McpServer(
                 name: name,
                 serverConfig: config,
-                isEnabled: true
+                isEnabled: true,
+                apps: [.claude]
+            )
+            servers.append(server)
+            imported += 1
+        }
+
+        if imported > 0 {
+            try? persistData()
+        }
+        return imported
+    }
+
+    /// 从 ~/.codex/config.toml 导入 MCP
+    func importFromCodex() -> Int {
+        guard let doc = store.readCodexConfig() else { return 0 }
+
+        let sections = doc.sectionsWithPrefix("mcp_servers.")
+        var imported = 0
+
+        for section in sections {
+            let name = section.replacingOccurrences(of: "mcp_servers.", with: "")
+
+            if servers.contains(where: { $0.name == name }) {
+                // 已存在，仅添加 .codex 到 apps
+                if let idx = servers.firstIndex(where: { $0.name == name }) {
+                    servers[idx].apps.insert(.codex)
+                }
+                continue
+            }
+
+            let keyValues = doc.getAllKeyValues(in: section)
+            var config: [String: AnyCodable] = [:]
+            for (key, value) in keyValues {
+                config[key] = AnyCodable(value)
+            }
+
+            if validateConfig(config) != nil { continue }
+
+            let server = McpServer(
+                name: name,
+                serverConfig: config,
+                isEnabled: true,
+                apps: [.codex]
             )
             servers.append(server)
             imported += 1

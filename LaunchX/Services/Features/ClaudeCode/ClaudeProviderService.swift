@@ -25,7 +25,21 @@ final class ClaudeProviderService: ObservableObject {
     static let shared = ClaudeProviderService()
 
     @Published var providers: [ClaudeProvider] = []
-    @Published var currentProvider: ClaudeProvider?
+
+    /// 当前激活的 Claude Code Provider
+    var currentClaudeProvider: ClaudeProvider? {
+        providers.first { $0.isCurrent && $0.apps.contains(.claude) }
+    }
+
+    /// 当前激活的 Codex Provider
+    var currentCodexProvider: ClaudeProvider? {
+        providers.first { $0.isCurrent && $0.apps.contains(.codex) }
+    }
+
+    /// 向后兼容：返回最近一个 isCurrent 的 provider
+    var currentProvider: ClaudeProvider? {
+        currentClaudeProvider ?? currentCodexProvider
+    }
 
     private let store = ClaudeDataStore.shared
     private let fileManager = FileManager.default
@@ -38,7 +52,6 @@ final class ClaudeProviderService: ObservableObject {
 
     private func loadData() {
         providers = store.loadProviders()
-        currentProvider = providers.first { $0.isCurrent }
     }
 
     private func persistData() throws {
@@ -57,13 +70,12 @@ final class ClaudeProviderService: ObservableObject {
     func addProvider(_ provider: ClaudeProvider) throws {
         var newProvider = provider
         newProvider.sortIndex = providers.count
-        if providers.isEmpty {
+        // 如果该 app target 下没有其他 provider，自动设为 current
+        let sameAppProviders = providers.filter { !$0.apps.intersection(newProvider.apps).isEmpty }
+        if sameAppProviders.isEmpty {
             newProvider.isCurrent = true
         }
         providers.append(newProvider)
-        if newProvider.isCurrent {
-            currentProvider = newProvider
-        }
         try persistData()
     }
 
@@ -78,8 +90,12 @@ final class ClaudeProviderService: ObservableObject {
         guard let index = providers.firstIndex(where: { $0.id == provider.id }) else { return }
         providers[index] = provider
         if provider.isCurrent {
-            currentProvider = provider
-            try writeClaudeSettings(provider)
+            if provider.apps.contains(.claude) {
+                try writeClaudeSettings(provider)
+            }
+            if provider.apps.contains(.codex) {
+                try writeCodexSettings(provider)
+            }
         }
         try persistData()
     }
@@ -112,9 +128,12 @@ final class ClaudeProviderService: ObservableObject {
         // 3. 备份当前配置
         try store.backupClaudeSettings()
 
-        // 4. 更新 isCurrent 标志
+        // 4. 更新 isCurrent 标志（仅影响同一 app target 的 Provider）
+        let targetApps = targetProvider.apps
         for i in providers.indices {
-            providers[i].isCurrent = (providers[i].id == targetProvider.id)
+            if !providers[i].apps.intersection(targetApps).isEmpty {
+                providers[i].isCurrent = (providers[i].id == targetProvider.id)
+            }
         }
 
         // 5. 获取切换目标（更新后的）
@@ -122,15 +141,15 @@ final class ClaudeProviderService: ObservableObject {
             providers = snapshot
             throw ProviderSwitchError.providerNotFound
         }
-        currentProvider = activatedProvider
 
         // 6. 写入新配置（可能抛出错误）
         do {
-            try writeClaudeSettings(activatedProvider)
+            if activatedProvider.apps.contains(.claude) {
+                try writeClaudeSettings(activatedProvider)
+            }
         } catch {
             // 回滚：恢复旧 Provider 数据
             providers = snapshot
-            currentProvider = providers.first { $0.isCurrent }
             throw ProviderSwitchError.settingsWriteFailed(error)
         }
 
@@ -142,12 +161,17 @@ final class ClaudeProviderService: ObservableObject {
             throw ProviderSwitchError.persistFailed(error)
         }
 
-        // 8. 触发 MCP 同步
-        Task { @MainActor in
-            try? ClaudeMcpService.shared.syncToClaude()
+        // 8. 同步 Codex 配置（如果 apps 包含 .codex）
+        if activatedProvider.apps.contains(.codex) {
+            try? writeCodexSettings(activatedProvider)
         }
 
-        // 9. 触发 Skills 同步
+        // 9. 触发 MCP 同步
+        Task { @MainActor in
+            try? ClaudeMcpService.shared.syncAll()
+        }
+
+        // 10. 触发 Skills 同步
         Task { @MainActor in
             ClaudeSkillService.shared.syncAllEnabled()
         }
@@ -209,6 +233,156 @@ final class ClaudeProviderService: ObservableObject {
         return result
     }
 
+    // MARK: - Codex 配置同步
+
+    /// 将 Provider 配置写入 Codex 的 config.toml，并自动设置环境变量
+    func writeCodexSettings(_ provider: ClaudeProvider) throws {
+        let config = provider.settingsConfig
+
+        let apiKey = config["CODEX_API_KEY"] ?? config["ANTHROPIC_API_KEY"]
+        let baseUrl = config["CODEX_BASE_URL"] ?? config["ANTHROPIC_BASE_URL"]
+        let model = config["CODEX_MODEL"] ?? config["ANTHROPIC_MODEL"]
+        let providerId = config["CODEX_PROVIDER_ID"]
+            ?? provider.name.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+                .joined(separator: "_")
+        let envKey = config["CODEX_ENV_KEY"] ?? "OPENAI_API_KEY"
+
+        // 1. 写入 config.toml
+        let doc = store.readCodexConfig() ?? TomlDocument()
+
+        let existingSections = doc.sectionsWithPrefix("model_providers.")
+        for section in existingSections {
+            doc.removeSection(section)
+        }
+
+        if let model {
+            doc.set("model", value: model)
+        }
+        doc.set("model_provider", value: providerId)
+
+        let providerSection = "model_providers.\(providerId)"
+        doc.set("name", value: provider.name, in: providerSection)
+        if let baseUrl {
+            doc.set("base_url", value: baseUrl, in: providerSection)
+        }
+        doc.set("wire_api", value: "responses", in: providerSection)
+        doc.set("env_key", value: envKey, in: providerSection)
+
+        try store.ensureCodexDir()
+        try store.writeCodexConfig(doc)
+
+        // 2. 自动写入 shell 环境变量
+        if let apiKey {
+            try writeCodexEnvVars(envKey: envKey, apiKey: apiKey)
+        }
+    }
+
+    /// 自动将 Codex 环境变量写入 shell 配置文件
+    /// 使用标记段便于后续更新，不会影响用户其他配置
+    private func writeCodexEnvVars(envKey: String, apiKey: String) throws {
+        let home = fileManager.homeDirectoryForCurrentUser.path
+        let shellRCPath: String
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        if shell.contains("zsh") {
+            shellRCPath = home + "/.zshrc"
+        } else if shell.contains("bash") {
+            shellRCPath = home + "/.bashrc"
+        } else {
+            shellRCPath = home + "/.profile"
+        }
+
+        let beginMarker = "# >>> LaunchX Codex >>>"
+        let endMarker = "# <<< LaunchX Codex <<<"
+
+        var content = ""
+        if fileManager.fileExists(atPath: shellRCPath),
+           let existing = try? String(contentsOfFile: shellRCPath, encoding: .utf8) {
+            content = existing
+        }
+
+        let newBlock = """
+        \(beginMarker)
+        export \(envKey)="\(apiKey)"
+        \(endMarker)
+        """
+
+        // 如果已有标记段，替换；否则追加
+        if content.contains(beginMarker) && content.contains(endMarker),
+           let beginRange = content.range(of: beginMarker),
+           let endRange = content.range(of: endMarker) {
+            content.replaceSubrange(beginRange.lowerBound..<endRange.upperBound, with: newBlock)
+        } else {
+            if !content.hasSuffix("\n") && !content.isEmpty {
+                content += "\n"
+            }
+            content += "\n\(newBlock)\n"
+        }
+
+        try content.write(toFile: shellRCPath, atomically: true, encoding: .utf8)
+
+        // 同时设置当前进程的环境变量（让本次 session 也生效）
+        setenv(envKey, apiKey, 1)
+    }
+
+    /// 从已有 Codex 配置导入 Provider
+    func importDefaultCodexConfig() -> ClaudeProvider? {
+        let doc = store.readCodexConfig()
+        let auth = store.readCodexAuth()
+
+        guard doc != nil || auth != nil else { return nil }
+
+        let model = doc?.getString("model")
+        let modelProvider = doc?.getString("model_provider")
+
+        // 尝试从 model_providers 段获取信息
+        var providerName: String? = modelProvider
+        var baseUrl: String?
+        var envKey: String?
+
+        if let doc = doc {
+            let providerSections = doc.sectionsWithPrefix("model_providers.")
+            // 如果有指定的 model_provider，优先导入那个
+            if let mp = modelProvider {
+                let targetSection = "model_providers.\(mp)"
+                providerName = doc.getString("name", in: targetSection) ?? mp
+                baseUrl = doc.getString("base_url", in: targetSection)
+                envKey = doc.getString("env_key", in: targetSection)
+            } else if let section = providerSections.first {
+                let sectionId = section.replacingOccurrences(of: "model_providers.", with: "")
+                providerName = doc.getString("name", in: section) ?? sectionId
+                baseUrl = doc.getString("base_url", in: section)
+                envKey = doc.getString("env_key", in: section)
+            }
+        }
+
+        // 获取 API Key：从 auth.json 按 envKey 查找
+        let resolvedEnvKey = envKey ?? "OPENAI_API_KEY"
+        let apiKey = auth?[resolvedEnvKey] ?? auth?["OPENAI_API_KEY"]
+
+        guard apiKey != nil || baseUrl != nil || model != nil else { return nil }
+
+        var settingsConfig: [String: String] = [:]
+        if let apiKey { settingsConfig["CODEX_API_KEY"] = apiKey }
+        if let baseUrl { settingsConfig["CODEX_BASE_URL"] = baseUrl }
+        if let model { settingsConfig["CODEX_MODEL"] = model }
+        if let envKey { settingsConfig["CODEX_ENV_KEY"] = envKey }
+        if let modelProvider { settingsConfig["CODEX_PROVIDER_ID"] = modelProvider }
+
+        let defaultProvider = ClaudeProvider(
+            name: providerName ?? "Codex 默认配置",
+            settingsConfig: settingsConfig,
+            category: .thirdParty,
+            notes: "从现有 Codex 配置导入",
+            isCurrent: false,
+            apps: [.codex]
+        )
+        providers.append(defaultProvider)
+        try? persistData()
+        return defaultProvider
+    }
+
     // MARK: - Backfill
 
     /// 回填当前 settings.json 配置到当前激活的 Provider
@@ -229,7 +403,6 @@ final class ClaudeProviderService: ObservableObject {
         for i in providers.indices {
             if providers[i].isCurrent {
                 providers[i].settingsConfig = stringEnv
-                currentProvider = providers[i]
                 break
             }
         }
@@ -267,7 +440,6 @@ final class ClaudeProviderService: ObservableObject {
             isCurrent: true
         )
         providers.append(defaultProvider)
-        currentProvider = defaultProvider
         try? persistData()
         return defaultProvider
     }

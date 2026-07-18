@@ -57,13 +57,14 @@ final class IndexDatabase {
             return
         }
 
-        // Enhanced performance optimizations for 600k+ files
+        // Performance optimizations balanced for memory usage
+        // Target: support 600k+ files without excessive memory pressure on 8GB Macs
         executeSQL("PRAGMA journal_mode = WAL")  // Write-Ahead Logging for concurrency
         executeSQL("PRAGMA wal_autocheckpoint = 10000")  // 磁盘写入优化：减少 checkpoint 频率（默认 1000）
         executeSQL("PRAGMA synchronous = NORMAL")  // Balance safety and speed
-        executeSQL("PRAGMA cache_size = -128000")  // 128MB cache (increased for large datasets)
+        executeSQL("PRAGMA cache_size = -64000")  // 64MB page cache (reduced from 128MB)
         executeSQL("PRAGMA temp_store = MEMORY")  // Temp tables in memory
-        executeSQL("PRAGMA mmap_size = 536870912")  // 512MB memory-mapped I/O (increased)
+        executeSQL("PRAGMA mmap_size = 268435456")  // 256MB memory-mapped I/O (reduced from 512MB)
         executeSQL("PRAGMA locking_mode = NORMAL")  // Allow multiple readers
         executeSQL("PRAGMA page_size = 4096")  // Optimize page size
         executeSQL("PRAGMA optimize")  // Auto-optimize query planner

@@ -67,8 +67,39 @@ extension HotKeyService {
         }
     }
 
+    /// 风暴保护：检测到 flagsChanged 风暴时，临时停止双击监听一段时间。
+    /// 运行在主线程（NSEvent monitor 回调），removeMonitor / asyncAfter 均安全。
+    private func pauseDoubleTapForStorm() {
+        guard !doubleTapStormPaused else { return }
+        doubleTapStormPaused = true
+        doubleTapStormDetector.reset()
+        stopDoubleTapMonitoring()
+        print("HotKeyService: ⚠️ 检测到 flagsChanged 风暴，暂停双击唤起监听 \(Int(doubleTapStormPauseSeconds))s")
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.resumeDoubleTapFromStorm()
+        }
+        doubleTapStormResumeWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + doubleTapStormPauseSeconds, execute: work)
+    }
+
+    private func resumeDoubleTapFromStorm() {
+        doubleTapStormPaused = false
+        doubleTapStormResumeWork = nil
+        guard useDoubleTapModifier else { return }
+        startDoubleTapMonitoring()
+        print("HotKeyService: 风暴暂停结束，恢复双击唤起监听")
+    }
+
     /// 处理修饰键变化事件
     func handleFlagsChanged(_ event: NSEvent) {
+        // 风暴保护：高频 flagsChanged（疑似 Caps Lock 输入法切换遥测回环）时，
+        // 主动暂停双击唤起监听，避免监听回调持续堆积在卡死的主线程上。
+        if doubleTapStormDetector.recordAndCheck() {
+            pauseDoubleTapForStorm()
+        }
+
         let currentFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let targetFlag = doubleTapModifier.flag
 
@@ -509,6 +540,51 @@ extension HotKeyService {
         let settings = ClaudeCodeSwitcherSettings.load()
         if settings.hotKeyCode != 0 {
             registerClaudeCodeHotKey(
+                keyCode: settings.hotKeyCode, modifiers: settings.hotKeyModifiers)
+        }
+    }
+
+    // MARK: - Codex Switcher 快捷键
+
+    /// 注册 Codex Switcher 快捷键
+    func registerCodexHotKey(keyCode: UInt32, modifiers: UInt32) {
+        unregisterCodexHotKey()
+        guard keyCode != 0 else { return }
+
+        let hotKeyID = EventHotKeyID(signature: hotKeySignature, id: codexHotKeyId)
+        var hotKeyRef: EventHotKeyRef?
+
+        let status = RegisterEventHotKey(
+            keyCode,
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        if status == noErr {
+            codexHotKeyRef = hotKeyRef
+            print("HotKeyService: Registered Codex HotKey (Code: \(keyCode), Mods: \(modifiers))")
+        } else {
+            print("HotKeyService: Failed to register Codex hotkey. Status: \(status)")
+        }
+    }
+
+    /// 注销 Codex Switcher 快捷键
+    func unregisterCodexHotKey() {
+        if let ref = codexHotKeyRef {
+            UnregisterEventHotKey(ref)
+            codexHotKeyRef = nil
+            print("HotKeyService: Unregistered Codex HotKey")
+        }
+    }
+
+    /// 加载 Codex Switcher 快捷键设置
+    func loadCodexHotKey() {
+        let settings = CodexSwitcherSettings.load()
+        if settings.hotKeyCode != 0 {
+            registerCodexHotKey(
                 keyCode: settings.hotKeyCode, modifiers: settings.hotKeyModifiers)
         }
     }

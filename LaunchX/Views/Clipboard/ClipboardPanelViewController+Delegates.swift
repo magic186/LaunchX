@@ -125,7 +125,7 @@ extension ClipboardPanelViewController: NSTableViewDataSource, NSTableViewDelega
         // 5行文字高度: 5 * 17 (13pt字体 + 行间距) + 16 (上下各8pt padding) = 101
         let maxMultilineHeight: CGFloat = 101
 
-        // 图片类型根据实际图片尺寸计算高度
+        // 图片类型根据实际图片尺寸计算高度（按需懒加载图片数据）
         if item.contentType == .image {
             if let data = ClipboardService.shared.imageData(for: item),
                 let image = NSImage(data: data)

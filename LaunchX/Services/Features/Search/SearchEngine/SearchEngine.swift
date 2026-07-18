@@ -47,8 +47,11 @@ final class SearchEngine: ObservableObject {
         }
     }
 
-    // 缓存 BookmarkSettings，避免每次搜索都反序列化
-    private var cachedBookmarkSettings: BookmarkSettings = BookmarkSettings.load()
+    // 缓存各功能 Settings，避免每次按键都反序列化（UserDefaults + JSONDecoder）
+    private(set) var cachedBookmarkSettings: BookmarkSettings = BookmarkSettings.load()
+    private(set) var cachedTwoFactorAuthSettings = TwoFactorAuthSettings.load()
+    private(set) var cachedClaudeCodeSettings = ClaudeCodeSwitcherSettings.load()
+    private(set) var cachedCodexSettings = CodexSwitcherSettings.load()
 
     // 缓存默认搜索网页直达结果
     private var cachedDefaultSearchWebLinks: [SearchResult]?
@@ -66,6 +69,12 @@ final class SearchEngine: ObservableObject {
     // WAL checkpoint 定时器（磁盘写入优化）
     private var walCheckpointTimer: Timer?
 
+    // Trie 定期重建（内存回收：Trie 只增不减，定期全量重建回收死节点，曾导致 30+GB 膨胀）
+    private var trieRebuildTimer: Timer?
+    private var fsRemovalsSinceTrieRebuild = 0
+    private let trieRebuildInterval: TimeInterval = 6 * 3600  // 每 6 小时
+    private let trieRebuildRemovalThreshold = 50_000  // 累计删除达 5 万也触发
+
     // FSEvents 批量处理开关（可通过配置控制）
     private var fsEventsBatchProcessingEnabled: Bool {
         DiskWriteOptimizationSettings.shared.fsEventsBatchProcessingEnabled
@@ -79,6 +88,7 @@ final class SearchEngine: ObservableObject {
         setupSettingsObserver()
         loadIndexOnStartup()
         startWALCheckpointTimer()
+        startTrieRebuildTimer()
     }
 
     /// 监听 UserDefaults 变化，刷新缓存的 Settings
@@ -88,7 +98,11 @@ final class SearchEngine: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            // 刷新所有缓存的 Settings，确保配置变更立即生效
             self?.cachedBookmarkSettings = BookmarkSettings.load()
+            self?.cachedTwoFactorAuthSettings = TwoFactorAuthSettings.load()
+            self?.cachedClaudeCodeSettings = ClaudeCodeSwitcherSettings.load()
+            self?.cachedCodexSettings = CodexSwitcherSettings.load()
             self?.cachedDefaultSearchWebLinks = nil  // 清除缓存，下次搜索时重新生成
         }
     }
@@ -424,9 +438,17 @@ final class SearchEngine: ObservableObject {
     }
 
     private func handleFSEvents(_ events: [FSEventsMonitor.FSEvent]) {
+        // 过滤掉位于 package（app / framework / plugin 等 bundle）内部的事件。
+        // 新安装 app 时 FSEvents（kFSEventStreamCreateFlagFileEvents）会逐个上报 bundle 内部文件
+        // （如 XXX.app/Contents/Info.plist、XXX.app/Contents/Resources/...），这些不是用户希望搜索的
+        // 独立条目。此处与全量扫描 FileIndexer.scan 的 .skipsPackageDescendants 行为保持一致：
+        // 保留 bundle 本身（如 XXX.app），跳过其内部文件。
+        let validEvents = events.filter { !isInsidePackage(path: $0.path) }
+        guard !validEvents.isEmpty else { return }
+
         // 如果批量处理被禁用，立即处理每个事件
         guard fsEventsBatchProcessingEnabled else {
-            for event in events {
+            for event in validEvents {
                 switch event.type {
                 case .created, .modified:
                     addToIndex(path: event.path)
@@ -441,7 +463,7 @@ final class SearchEngine: ObservableObject {
 
         // 磁盘写入优化: 批量处理文件系统事件
         // 收集事件到队列，延迟 500ms 后批量处理，减少数据库事务次数
-        fsEventQueue.append(contentsOf: events)
+        fsEventQueue.append(contentsOf: validEvents)
 
         // 检查队列溢出保护（超过 1000 个事件立即处理）
         if fsEventQueue.count > 1000 {
@@ -450,9 +472,9 @@ final class SearchEngine: ObservableObject {
             return
         }
 
-        // 重置定时器，延迟 500ms 后批量处理
+        // 重置定时器，延迟 300ms 后批量处理（与 FSEvents 1s 防抖配合，总延迟 ≤ 1.3s）
         fsEventTimer?.invalidate()
-        fsEventTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) {
+        fsEventTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) {
             [weak self] _ in
             self?.processFSEventsBatch()
         }
@@ -520,7 +542,14 @@ final class SearchEngine: ObservableObject {
                     for path in pathsToRemove {
                         self.memoryIndex.remove(path: path)
                     }
+                    self.fsRemovalsSinceTrieRebuild += pathsToRemove.count
                     print("SearchEngine: Batch removed \(pathsToRemove.count) paths")
+                    // 累计删除达阈值，触发 Trie 全量重建回收内存（开发机文件频繁进出时尤其重要）
+                    if self.fsRemovalsSinceTrieRebuild >= self.trieRebuildRemovalThreshold {
+                        self.fsRemovalsSinceTrieRebuild = 0
+                        self.memoryIndex.rebuildTries()
+                        print("SearchEngine: 累计删除达阈值，触发 Trie 重建回收内存")
+                    }
                 }
             }
         }
@@ -555,6 +584,43 @@ final class SearchEngine: ObservableObject {
 
         // 批量处理完成后，检查是否需要执行 checkpoint（磁盘写入优化）
         checkAndForceCheckpoint()
+    }
+
+    /// 已知的 macOS bundle / package 扩展名。
+    /// 新安装 app 时 FSEvents 会枚举其内部文件，这些 bundle 内部文件不应进入索引。
+    private static let packageExtensions: Set<String> = [
+        "app",
+        "bundle",
+        "framework",
+        "plugin",
+        "kext",
+        "prefpane",
+        "osax",
+        "qlgenerator",
+        "mdimporter",
+        "action",
+        "menu",
+        "pkg",
+    ]
+
+    /// 判断路径是否位于 package（app / framework / plugin 等 bundle）内部。
+    ///
+    /// 与全量扫描 `FileIndexer.scan` 的 `.skipsPackageDescendants` 行为对齐：保留 bundle 本身
+    /// （如 `/Applications/X.app`），跳过其内部文件（如 `/Applications/X.app/Contents/Info.plist`）。
+    ///
+    /// - Parameter path: 待判断的文件路径
+    /// - Returns: 若路径的某个中间组件是已知 bundle 扩展名则返回 true（应跳过）
+    private func isInsidePackage(path: String) -> Bool {
+        let components = (path as NSString).pathComponents
+        guard components.count > 1 else { return false }
+        // 仅检查“中间”组件（不含最后一段）：最后一段若是 .app，那它是 bundle 本身，应保留
+        for component in components.dropLast() {
+            let ext = (component as NSString).pathExtension.lowercased()
+            if !ext.isEmpty, Self.packageExtensions.contains(ext) {
+                return true
+            }
+        }
+        return false
     }
 
     /// 创建文件记录（辅助方法）
@@ -712,6 +778,14 @@ final class SearchEngine: ObservableObject {
         }
     }
 
+    /// 启动 Trie 定期重建定时器（内存回收）。
+    /// MemoryIndex.remove 已会修剪 Trie，但仍可能残留碎片；定期全量重建可彻底回收死 TrieNode。
+    private func startTrieRebuildTimer() {
+        trieRebuildTimer = Timer.scheduledTimer(withTimeInterval: trieRebuildInterval, repeats: true) { [weak self] _ in
+            self?.memoryIndex.rebuildTries()
+        }
+    }
+
     /// 执行空闲时的 checkpoint
     private func performIdleCheckpoint() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -732,6 +806,13 @@ final class SearchEngine: ObservableObject {
     /// This is the main search API, called on every keystroke
     func searchSync(text: String) -> [SearchResult] {
         guard !text.isEmpty else { return [] }
+
+        // Check cache first — duplicate queries hit O(1) instead of full Trie scan
+        if let cached = searchCache.getCachedResults(for: text) {
+            return performanceMonitor.measureSearch(query: text, cacheHit: true) {
+                cached
+            }
+        }
 
         return performanceMonitor.measureSearch(query: text, cacheHit: false) {
             let config = searchConfig
@@ -763,6 +844,9 @@ final class SearchEngine: ObservableObject {
             // 添加书签搜索结果
             let bookmarkResults = searchBookmarks(query: text)
             results.append(contentsOf: bookmarkResults)
+
+            // Cache results for duplicate queries (e.g., user backspacing)
+            searchCache.cacheResults(results, for: text)
 
             return results
         }

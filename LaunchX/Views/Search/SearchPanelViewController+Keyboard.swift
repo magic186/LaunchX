@@ -31,7 +31,7 @@ extension SearchPanelViewController {
                 return event
             }
             if (isInIDEProjectMode || isInFolderOpenMode || isInWebLinkQueryMode || isInUtilityMode
-                || isInBookmarkMode || isIn2FAMode || isInClaudeCodeMode)
+                || isInBookmarkMode || isIn2FAMode || isInClaudeCodeMode || isInCodexMode)
                 && searchField.stringValue.isEmpty
             {
                 if isInIDEProjectMode {
@@ -48,6 +48,8 @@ extension SearchPanelViewController {
                     exit2FAMode()
                 } else if isInClaudeCodeMode {
                     exitClaudeCodeMode()
+                } else if isInCodexMode {
+                    exitCodexMode()
                 }
                 return nil
             }
@@ -55,7 +57,7 @@ extension SearchPanelViewController {
         case 48:  // Tab - 进入 IDE 项目模式、文件夹打开模式、网页直达 Query 模式或书签模式
             if isComposing { return event }
             if !isInIDEProjectMode && !isInFolderOpenMode && !isInWebLinkQueryMode
-                && !isInBookmarkMode && !isIn2FAMode && !isInClaudeCodeMode
+                && !isInBookmarkMode && !isIn2FAMode && !isInClaudeCodeMode && !isInCodexMode
             {
                 // 检查当前选中项是否有扩展功能
                 guard results.indices.contains(selectedIndex) else {
@@ -79,6 +81,12 @@ extension SearchPanelViewController {
                 // 检查是否为 Claude Code 入口
                 if item.isClaudeCodeEntry {
                     enterClaudeCodeMode()
+                    return nil
+                }
+
+                // 检查是否为 Codex 入口
+                if item.isCodexEntry {
+                    enterCodexMode()
                     return nil
                 }
 
@@ -160,6 +168,10 @@ extension SearchPanelViewController {
             }
             if isInClaudeCodeMode {
                 exitClaudeCodeMode()
+                return nil
+            }
+            if isInCodexMode {
+                exitCodexMode()
                 return nil
             }
             PanelManager.shared.hidePanel()

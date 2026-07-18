@@ -149,6 +149,14 @@ class HotKeyService: ObservableObject {
     let doubleTapInterval: TimeInterval = 0.3  // 双击间隔阈值
     var previousFlags: NSEvent.ModifierFlags = []
 
+    // 双击唤起的 flagsChanged 风暴保护（Caps Lock 回环时暂停监听）
+    // 注意：这些属性需在 HotKeyService+CustomHotKeys.swift 的 extension 中访问，
+    // 故不能用 private（private 仅限同文件），用默认 internal。
+    let doubleTapStormDetector = FlagsStormDetector()
+    var doubleTapStormPaused = false
+    var doubleTapStormResumeWork: DispatchWorkItem?
+    let doubleTapStormPauseSeconds: TimeInterval = 30
+
     // MARK: - 自定义快捷键
 
     /// 自定义快捷键触发回调 (itemId, isExtension)
@@ -215,6 +223,13 @@ class HotKeyService: ObservableObject {
     var claudeCodeHotKeyRef: EventHotKeyRef?
     /// Claude Code Switcher 快捷键 ID
     let claudeCodeHotKeyId: UInt32 = 8
+
+    /// Codex Switcher 快捷键触发回调
+    var onCodexHotKeyPressed: (() -> Void)?
+    /// Codex Switcher 快捷键引用
+    var codexHotKeyRef: EventHotKeyRef?
+    /// Codex Switcher 快捷键 ID
+    let codexHotKeyId: UInt32 = 9
 
     // MARK: - 私有属性
 
@@ -343,6 +358,14 @@ class HotKeyService: ObservableObject {
             if hotKeyID.id == claudeCodeHotKeyId {
                 DispatchQueue.main.async { [weak self] in
                     self?.onClaudeCodeHotKeyPressed?()
+                }
+                return noErr
+            }
+
+            // 检查是否为 Codex Switcher 快捷键
+            if hotKeyID.id == codexHotKeyId {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onCodexHotKeyPressed?()
                 }
                 return noErr
             }

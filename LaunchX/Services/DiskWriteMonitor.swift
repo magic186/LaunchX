@@ -26,6 +26,8 @@ final class DiskWriteMonitor {
         DiskWriteOptimizationSettings.shared
     }
 
+    private var lastUserDefaultsSaveTime: Date = Date.distantPast
+
     private init() {
         loadStatistics()
     }
@@ -47,8 +49,11 @@ final class DiskWriteMonitor {
         let fiveMinutesAgo = Date().addingTimeInterval(-300)
         writeHistory.removeAll { $0.timestamp < fiveMinutesAgo }
 
-        // 定期保存统计数据
-        if writeHistory.count % 10 == 0 {
+        // 定期保存统计数据（每 100 次写入 OR 每 30 秒，降低 I/O 开销）
+        if writeHistory.count % 100 == 0
+            || Date().timeIntervalSince(lastUserDefaultsSaveTime) >= 30
+        {
+            lastUserDefaultsSaveTime = Date()
             saveStatistics()
         }
 

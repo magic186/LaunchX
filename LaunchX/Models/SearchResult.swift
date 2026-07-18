@@ -51,6 +51,7 @@ struct SearchResult: Identifiable, Hashable {
 
     // Claude Code Switcher 相关字段
     let isClaudeCodeEntry: Bool  // 是否为 Claude Code Switcher 入口
+    let isCodexEntry: Bool  // 是否为 Codex Switcher 入口
     let isClaudeCodeItem: Bool  // 是否为 Claude Code Switcher 子项（Provider/MCP/Skill）
     let claudeCodeItemType: ClaudeCodeItemType?  // 子项类型
     let claudeCodeItemId: String?  // 关联的实体 ID（Provider/MCP/Skill 的唯一标识）
@@ -65,7 +66,7 @@ struct SearchResult: Identifiable, Hashable {
         isSectionHeader: Bool = false, isReminder: Bool = false,
         reminderIdentifier: String? = nil, reminderColor: NSColor? = nil,
         reminderURL: URL? = nil, processStats: String? = nil,
-        isClaudeCodeEntry: Bool = false, isClaudeCodeItem: Bool = false,
+        isClaudeCodeEntry: Bool = false, isCodexEntry: Bool = false, isClaudeCodeItem: Bool = false,
         claudeCodeItemType: ClaudeCodeItemType? = nil, claudeCodeItemId: String? = nil
     ) {
         self.id = id
@@ -93,6 +94,7 @@ struct SearchResult: Identifiable, Hashable {
         self.reminderURL = reminderURL
         self.processStats = processStats
         self.isClaudeCodeEntry = isClaudeCodeEntry
+        self.isCodexEntry = isCodexEntry
         self.isClaudeCodeItem = isClaudeCodeItem
         self.claudeCodeItemType = claudeCodeItemType
         self.claudeCodeItemId = claudeCodeItemId
@@ -111,6 +113,7 @@ struct SearchResult: Identifiable, Hashable {
 
 enum ClaudeCodeItemType: String, Codable {
     case provider
+    case contextPrompt
     case mcp
     case skill
 }

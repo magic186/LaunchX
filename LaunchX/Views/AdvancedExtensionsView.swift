@@ -9,6 +9,7 @@ enum AdvancedExtensionType: String, CaseIterable, Identifiable {
     case terminal = "终端"
     case reminders = "提醒事项"
     case claudeCode = "Claude Code"
+    case codex = "Codex"
 
     var id: String { rawValue }
 
@@ -23,8 +24,13 @@ enum AdvancedExtensionType: String, CaseIterable, Identifiable {
         return allCases
     }
 
+    /// 官方品牌 logo 的 asset 名（若有），优先于 SF Symbol 显示
     var iconImageName: String? {
-        return nil
+        switch self {
+        case .claudeCode: return "ClaudeLogo"
+        case .codex: return "OpenAILogo"
+        default: return nil
+        }
     }
 
     var sfSymbolName: String {
@@ -37,6 +43,7 @@ enum AdvancedExtensionType: String, CaseIterable, Identifiable {
         case .terminal: return "terminal.fill"
         case .reminders: return "checklist"
         case .claudeCode: return "cpu"
+        case .codex: return "terminal"
         }
     }
 
@@ -50,6 +57,7 @@ enum AdvancedExtensionType: String, CaseIterable, Identifiable {
         case .terminal: return .gray
         case .reminders: return .purple
         case .claudeCode: return .brown
+        case .codex: return .green
         }
     }
 }
@@ -136,6 +144,8 @@ struct AdvancedExtensionsView: View {
             RemindersSettingsView()
         case .claudeCode:
             ClaudeCodeSettingsView()
+        case .codex:
+            CodexMainSettingsView()
         }
     }
 }
@@ -164,10 +174,17 @@ struct ExtensionSidebarItem: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: sfSymbolName)
-                    .font(.system(size: 14))
-                    .foregroundColor(iconColor)
-                    .frame(width: 14, alignment: .center)
+                if let imageName = iconImageName, let logo = NSImage(named: imageName) {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: sfSymbolName)
+                        .font(.system(size: 14))
+                        .foregroundColor(iconColor)
+                        .frame(width: 14, alignment: .center)
+                }
                 Text(title)
                     .foregroundColor(.primary)
                 Spacer()

@@ -8,6 +8,11 @@ final class IDERecentProjectsService {
 
     private init() {}
 
+    // 缓存 getFolderOpeners 结果，避免频繁检测 IDE 安装状态
+    private var cachedFolderOpeners: [FolderOpenerApp]?
+    private var folderOpenersCacheTimestamp: Date = .distantPast
+    private let folderOpenersCacheDuration: TimeInterval = 30  // 30 秒缓存
+
     enum CommandError: Error {
         case invalidUTF8
         case nonZeroExitStatus(Int32)
@@ -25,7 +30,28 @@ final class IDERecentProjectsService {
 
     /// 获取可用于打开文件夹的应用列表
     /// - Returns: 应用列表，Finder 在最前，然后是已安装的 IDE
+    /// - Note: 结果缓存 30 秒，避免频繁检测 IDE 安装状态
     func getAvailableFolderOpeners() -> [FolderOpenerApp] {
+        // 使用缓存避免频繁遍历 IDE 类型
+        if let cached = cachedFolderOpeners,
+            Date().timeIntervalSince(folderOpenersCacheTimestamp) < folderOpenersCacheDuration
+        {
+            return cached
+        }
+
+        let openers = buildFolderOpenersList()
+        cachedFolderOpeners = openers
+        folderOpenersCacheTimestamp = Date()
+        return openers
+    }
+
+    /// 清除缓存（在 IDE 安装/卸载后调用）
+    func invalidateFolderOpenersCache() {
+        cachedFolderOpeners = nil
+    }
+
+    /// 实际构建可用打开器列表（不缓存）
+    private func buildFolderOpenersList() -> [FolderOpenerApp] {
         var openers: [FolderOpenerApp] = []
 
         // 1. Finder 始终在第一位

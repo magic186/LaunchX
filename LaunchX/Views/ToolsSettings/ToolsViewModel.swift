@@ -58,6 +58,7 @@ class ToolsViewModel: ObservableObject {
 
     func deleteTool(_ tool: ToolItem) {
         tools.removeAll { $0.id == tool.id }
+        IconCacheManager.shared.removeIcon(for: tool.id)
         saveConfig()
     }
 

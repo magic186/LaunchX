@@ -6,6 +6,7 @@ struct SkillRepoSettingsView: View {
     @StateObject private var service = ClaudeSkillService.shared
     @State private var newOwner: String = ""
     @State private var newName: String = ""
+    @State private var newApps: Set<AppTarget> = [.claude, .codex]
 
     var body: some View {
         VStack(spacing: 16) {
@@ -13,23 +14,40 @@ struct SkillRepoSettingsView: View {
                 .font(.headline)
 
             // 添加仓库
-            HStack(spacing: 8) {
-                TextField("Owner", text: $newOwner)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                Text("/")
-                    .foregroundColor(.secondary)
-                TextField("Repo Name", text: $newName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-                Button("添加") {
-                    if !newOwner.isEmpty && !newName.isEmpty {
-                        service.addRepo(owner: newOwner, name: newName)
-                        newOwner = ""
-                        newName = ""
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField("Owner", text: $newOwner)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                    Text("/")
+                        .foregroundColor(.secondary)
+                    TextField("Repo Name", text: $newName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                    Button("添加") {
+                        if !newOwner.isEmpty && !newName.isEmpty {
+                            service.addRepo(owner: newOwner, name: newName, apps: newApps)
+                            newOwner = ""
+                            newName = ""
+                        }
                     }
+                    .disabled(newOwner.isEmpty || newName.isEmpty)
                 }
-                .disabled(newOwner.isEmpty || newName.isEmpty)
+
+                HStack(spacing: 12) {
+                    Text("适用:")
+                        .font(.system(size: 12))
+                    Toggle("Claude Code", isOn: Binding(
+                        get: { newApps.contains(.claude) },
+                        set: { on in if on { newApps.insert(.claude) } else { newApps.remove(.claude) } }
+                    ))
+                    .controlSize(.small)
+                    Toggle("Codex", isOn: Binding(
+                        get: { newApps.contains(.codex) },
+                        set: { on in if on { newApps.insert(.codex) } else { newApps.remove(.codex) } }
+                    ))
+                    .controlSize(.small)
+                }
             }
 
             Divider()
@@ -46,9 +64,20 @@ struct SkillRepoSettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(repo.idString)
                                     .font(.system(size: 13))
-                                Text("分支: \(repo.branch)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
+                                HStack(spacing: 4) {
+                                    Text("分支: \(repo.branch)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                    ForEach(Array(repo.apps).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { app in
+                                        Text(app.displayName)
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 1)
+                                            .background(app == .claude ? Color.brown : Color.green)
+                                            .cornerRadius(3)
+                                    }
+                                }
                             }
                             Spacer()
                             Toggle("", isOn: Binding(
@@ -88,6 +117,6 @@ struct SkillRepoSettingsView: View {
             }
         }
         .padding(16)
-        .frame(width: 450, height: 380)
+        .frame(width: 480, height: 400)
     }
 }

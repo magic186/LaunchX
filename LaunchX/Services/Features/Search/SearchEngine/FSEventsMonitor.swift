@@ -31,11 +31,11 @@ final class FSEventsMonitor {
     // Debounce events to avoid flooding
     private var pendingEvents: [String: EventType] = [:]
     private var debounceWorkItem: DispatchWorkItem?
-    private let debounceInterval: TimeInterval = 2.0  // 防抖间隔2秒，减少频繁更新
+    private let debounceInterval: TimeInterval = 1.0  // 防抖间隔1秒，平衡响应速度和磁盘写入
 
     // 批量事件阈值：当短时间内事件过多时，延长防抖时间
     private let batchThreshold = 50
-    private let extendedDebounceInterval: TimeInterval = 5.0
+    private let extendedDebounceInterval: TimeInterval = 3.0
 
     // 事件数量上限：超过此数量时丢弃旧事件，防止内存溢出
     private let maxPendingEvents = 500

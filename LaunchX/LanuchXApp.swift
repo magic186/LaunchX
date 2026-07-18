@@ -41,14 +41,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isStatusItemSetup = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 首先检查是否运行在 Translocation 模式，这会影响更新和权限
+        // 1. 关键路径：必须先检查 Translocation 和设置激活策略
         checkTranslocation()
 
-        // 迁移提醒事项设置：为已授权用户自动启用功能
-        migrateRemindersSettings()
-
-        setupSettingsOpenerWindow()
-        observeHotKeyChanges()
+        // Disable automatic window tabbing (Sierra+)
+        NSWindow.allowsAutomaticWindowTabbing = false
 
         // 注册系统休眠通知（磁盘写入优化：确保休眠前保存数据）
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -58,17 +55,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
-        // Activation policy and status item setup are handled in checkPermissionsAndSetup
-        // 如果需要显示引导页，保持 regular 模式
-        // 如果权限已全部授予，再切换到 accessory 模式
-
-        // Disable automatic window tabbing (Sierra+)
-        NSWindow.allowsAutomaticWindowTabbing = false
-
-        // 1. Initialize the Search Panel (pure AppKit, no SwiftUI)
+        // 2. Initialize the Search Panel (pure AppKit, no SwiftUI)
         PanelManager.shared.setup()
 
-        // 拦截系统默认的 Cmd+Q 行为，防止其干扰菜单栏图标
+        // 拦截系统默认的 Cmd+Q 行为
         if let mainMenu = NSApp.mainMenu {
             for item in mainMenu.items {
                 if let submenu = item.submenu {
@@ -82,14 +72,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 2. Check permissions first before setting up hotkey
+        // 3. Check permissions first before setting up hotkey
         checkPermissionsAndSetup()
 
-        // 3. Apply keyboard remapping from saved settings
-        applyKeyRemapSettings()
-
-        // 3. 启动时静默检查更新 (不了不了，做一个不打扰的小朋友)
-        // UpdateService.shared.checkForUpdates(manual: false)
+        // 4. 延迟执行非关键路径操作，加速启动
+        DispatchQueue.main.async { [weak self] in
+            self?.setupSettingsOpenerWindow()
+            self?.observeHotKeyChanges()
+            self?.migrateRemindersSettings()
+            self?.applyKeyRemapSettings()
+            // 启动主线程看门狗：检测主线程被系统输入法切换遥测(Caps Lock)长时间卡死时，
+            // 自动暂停键盘事件拦截以尝试恢复响应。
+            MainThreadWatchdog.shared.start()
+        }
     }
 
     @objc private func systemWillSleep() {
@@ -397,6 +392,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.post(name: .init("enterClaudeCodeModeDirectly"), object: nil)
         }
 
+        // 设置 Codex 快捷键回调
+        HotKeyService.shared.onCodexHotKeyPressed = {
+            let settings = CodexSwitcherSettings.load()
+            guard settings.isEnabled else { return }
+            PanelManager.shared.showPanel()
+            NotificationCenter.default.post(name: .init("enterCodexModeDirectly"), object: nil)
+        }
+
         // 设置选词翻译快捷键回调
         HotKeyService.shared.onTranslateSelectionHotKeyPressed = {
             let settings = AITranslateSettings.load()
@@ -437,6 +440,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 加载 Claude Code 快捷键
         HotKeyService.shared.loadClaudeCodeHotKey()
+
+        // 加载 Codex 快捷键
+        HotKeyService.shared.loadCodexHotKey()
 
         // 启动剪贴板监听
         ClipboardService.shared.startMonitoring()

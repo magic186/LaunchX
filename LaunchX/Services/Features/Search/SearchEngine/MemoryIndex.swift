@@ -36,12 +36,23 @@ final class MemoryIndex {
 
         // Lazy-loaded icon
         private var _icon: NSImage?
+        /// 标记 _icon 是否在 init 中被显式设置（网页/工具/系统命令/iconData）。
+        /// 这类图标释放后 getter 无法重建，因此 releaseLazyIcon 会跳过它们。
+        private var hasCustomIcon: Bool = false
+
         var icon: NSImage {
             if _icon == nil {
                 _icon = NSWorkspace.shared.icon(forFile: path)
                 _icon?.size = NSSize(width: 32, height: 32)
             }
             return _icon ?? NSImage()
+        }
+
+        /// 释放文件/应用类懒加载的 NSWorkspace 图标，下次访问时重新加载（定期内存回收）。
+        /// 自定义图标（网页/工具/系统命令/iconData）不受影响。
+        func releaseLazyIcon() {
+            guard !hasCustomIcon else { return }
+            _icon = nil
         }
 
         /// 用于创建网页直达、实用工具、系统命令等非文件系统项目
@@ -114,6 +125,9 @@ final class MemoryIndex {
                     systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: "Utility")
                 self._icon?.size = NSSize(width: 32, height: 32)
             }
+
+            // 显式设置的图标无法从文件路径重建，不参与定期懒图标回收。
+            self.hasCustomIcon = (self._icon != nil)
         }
 
         init(from record: FileRecord) {
@@ -176,7 +190,8 @@ final class MemoryIndex {
             case exact = 0
             case prefix = 1
             case contains = 2
-            case pinyin = 3
+            case fuzzy = 3  // 子序列模糊匹配（非连续）
+            case pinyin = 4
 
             static func < (lhs: MatchType, rhs: MatchType) -> Bool {
                 return lhs.rawValue < rhs.rawValue
@@ -214,6 +229,24 @@ final class MemoryIndex {
                 return true
             }
             return false
+        }
+
+        /// 子序列模糊匹配打分（仅对 ASCII 查询有意义）。返回最高分或 nil。
+        /// 用于 apps/tools「输错字母 / 缩写」也能命中的场景。
+        func fuzzyMatchScore(_ lowerQuery: String) -> Int? {
+            var best = 0
+            var hit = false
+            if let s = FuzzyMatcher.score(lowerQuery, in: lowerName), s > best {
+                best = s
+                hit = true
+            }
+            if let acronym = wordAcronym,
+                let s = FuzzyMatcher.score(lowerQuery, in: acronym), s > best
+            {
+                best = s
+                hit = true
+            }
+            return hit ? best : nil
         }
 
         /// 类型优先级（用于同层排序）
@@ -343,6 +376,35 @@ final class MemoryIndex {
         }
     }
 
+    /// 重建所有 Trie（nameTrie / pinyinTrie），回收 remove 过程中产生的死 TrieNode。
+    /// 不动 allItems / apps / files / directories（它们没有泄漏），仅重建只增不减的 Trie。
+    /// 供 SearchEngine 定期调用做内存回收。
+    func rebuildTries() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let start = Date()
+            self.nameTrie = TrieNode()
+            self.pinyinTrie = TrieNode()
+            for item in self.allItems.values {
+                if self.shouldIndexInTrie(item) {
+                    self.insertIntoTrie(self.nameTrie, key: item.lowerName, item: item)
+                    if let pinyin = item.pinyinFull {
+                        self.insertIntoTrie(self.pinyinTrie, key: pinyin, item: item)
+                    }
+                    if let acronym = item.pinyinAcronym {
+                        self.insertIntoTrie(self.pinyinTrie, key: acronym, item: item)
+                    }
+                }
+                // 顺便释放文件/应用类懒加载的图标缓存（定期内存回收）
+                item.releaseLazyIcon()
+            }
+            print(
+                "MemoryIndex: Trie rebuilt (\(self.totalCount) items) in "
+                + "\(String(format: "%.3f", Date().timeIntervalSince(start)))s [定期内存回收]"
+            )
+        }
+    }
+
     /// Add a single item to index (用于实时更新)
     func add(_ record: FileRecord) {
         queue.async { [weak self] in
@@ -409,8 +471,15 @@ final class MemoryIndex {
                 self.filesCount = self.files.count
             }
 
-            // Note: Removing from Trie is complex, we skip it for now
-            // The item will just be filtered out during search
+            // 从 Trie 中移除该 item 的所有 path 条目，并修剪空节点，
+            // 避免 Trie 只增不减导致内存膨胀（曾导致 6 天累积 30+GB）。
+            self.trieRemove(self.nameTrie, key: item.lowerName, path: path)
+            if let pinyin = item.pinyinFull {
+                self.trieRemove(self.pinyinTrie, key: pinyin, path: path)
+            }
+            if let acronym = item.pinyinAcronym {
+                self.trieRemove(self.pinyinTrie, key: acronym, path: path)
+            }
 
             self.totalCount = self.allItems.count
         }
@@ -573,7 +642,14 @@ final class MemoryIndex {
         // 最终排序：matchType > typePriority > 原始顺序（稳定排序保持层间优先级）
         let finalResults = Array(results.prefix(maxResults))
         return finalResults.enumerated().map { (index, item) -> (Int, SearchItem, SearchItem.MatchType) in
-            let matchType = item.matchesQuery(lowerQuery) ?? .pinyin
+            let matchType: SearchItem.MatchType
+            if let mt = item.matchesQuery(lowerQuery) {
+                matchType = mt
+            } else if queryIsAscii && item.fuzzyMatchScore(lowerQuery) != nil {
+                matchType = .fuzzy
+            } else {
+                matchType = .pinyin
+            }
             return (index, item, matchType)
         }.sorted { a, b in
             // 先按匹配类型排序
@@ -610,6 +686,9 @@ final class MemoryIndex {
             if item.matchesQuery(lowerQuery) != nil {
                 results.append(item)
             } else if queryIsAscii && item.matchesPinyin(lowerQuery) {
+                results.append(item)
+            } else if queryIsAscii && item.fuzzyMatchScore(lowerQuery) != nil {
+                // 子序列模糊匹配：输错字母 / 缩写也能命中（仅 apps/tools）
                 results.append(item)
             }
         }
@@ -741,6 +820,26 @@ final class MemoryIndex {
 
     private func shouldIndexInTrie(_ item: SearchItem) -> Bool {
         item.isApp || item.isDirectory || item.isWebLink || item.isUtility || item.isSystemCommand
+    }
+
+    /// 从 Trie 移除指定 path：沿 key 遍历，从每个经过节点的 itemPaths 删除该 path，
+    /// 并自底向上修剪「既无 itemPaths 又无 children」的空叶子节点，回收 TrieNode。
+    /// 共用节点（仍有其他 item）不会变空，因此不会被误删。
+    private func trieRemove(_ root: TrieNode, key: String, path: String) {
+        var stack: [(parent: TrieNode, char: Character, node: TrieNode)] = []
+        var current = root
+        for char in key {
+            guard let next = current.children[char] else { return }  // key 不存在，无需清理
+            stack.append((current, char, next))
+            current = next
+        }
+        for entry in stack {
+            entry.node.itemPaths.remove(path)
+        }
+        while let (parent, char, node) = stack.popLast() {
+            guard node.itemPaths.isEmpty, node.children.isEmpty else { break }
+            parent.children.removeValue(forKey: char)
+        }
     }
 
     private func searchTrie(_ root: TrieNode, prefix: String) -> [SearchItem]? {

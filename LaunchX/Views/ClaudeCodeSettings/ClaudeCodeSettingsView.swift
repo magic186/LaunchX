@@ -14,10 +14,19 @@ struct ClaudeCodeSettingsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // 标准头部: 图标 + 标题 + 启用开关
                 HStack(spacing: SettingsHeaderStyle.iconTitleSpacing) {
-                    Image(systemName: AdvancedExtensionType.claudeCode.sfSymbolName)
-                        .font(.system(size: SettingsHeaderStyle.iconSize))
-                        .foregroundColor(AdvancedExtensionType.claudeCode.iconColor)
-                        .frame(width: SettingsHeaderStyle.iconFrameSize, height: SettingsHeaderStyle.iconFrameSize)
+                    if let name = AdvancedExtensionType.claudeCode.iconImageName,
+                        let logo = NSImage(named: name)
+                    {
+                        Image(nsImage: logo)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: SettingsHeaderStyle.iconFrameSize, height: SettingsHeaderStyle.iconFrameSize)
+                    } else {
+                        Image(systemName: AdvancedExtensionType.claudeCode.sfSymbolName)
+                            .font(.system(size: SettingsHeaderStyle.iconSize))
+                            .foregroundColor(AdvancedExtensionType.claudeCode.iconColor)
+                            .frame(width: SettingsHeaderStyle.iconFrameSize, height: SettingsHeaderStyle.iconFrameSize)
+                    }
                     Text("Claude Code")
                         .font(SettingsHeaderStyle.titleFont)
                         .fontWeight(SettingsHeaderStyle.titleFontWeight)
@@ -119,6 +128,8 @@ struct ClaudeCodeSettingsView: View {
                     switch selectedTab {
                     case .providers:
                         ProviderListView()
+                    case .context:
+                        ContextPromptListView(app: .claude)
                     case .mcp:
                         McpServerListView()
                     case .skills:
@@ -139,6 +150,7 @@ struct ClaudeCodeSettingsView: View {
 
 enum ClaudeCodeTab: String, CaseIterable, Identifiable {
     case providers
+    case context
     case mcp
     case skills
 
@@ -147,6 +159,7 @@ enum ClaudeCodeTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .providers: return "Provider"
+        case .context: return "上下文"
         case .mcp: return "MCP"
         case .skills: return "Skills"
         }
@@ -155,6 +168,7 @@ enum ClaudeCodeTab: String, CaseIterable, Identifiable {
     var iconName: String {
         switch self {
         case .providers: return "server.rack"
+        case .context: return "text.bubble"
         case .mcp: return "puzzlepiece.extension"
         case .skills: return "wand.and.stars"
         }

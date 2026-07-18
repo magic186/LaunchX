@@ -139,6 +139,7 @@ struct ClipboardItem: Identifiable, Codable, Hashable {
             }
             return cleaned
         case .image:
+            // 启动后图片可能尚未加载到内存，使用持久化的数据大小展示。
             if dataSize > 0 {
                 return
                     "图片 (\(ByteCountFormatter.string(fromByteCount: dataSize, countStyle: .file)))"
@@ -183,10 +184,8 @@ struct ClipboardItem: Identifiable, Codable, Hashable {
             return NSImage(systemSymbolName: "doc.text", accessibilityDescription: "文本")
                 ?? NSImage()
         case .image:
-            // 如果有图片数据，返回缩略图
-            if let data = imageData, let image = NSImage(data: data) {
-                return image
-            }
+            // 列表小图标统一用通用 photo 图标；实际图片预览由 UI 层通过
+            // ClipboardService.imageData(for:) 按需懒加载，避免历史图片常驻内存。
             return NSImage(systemSymbolName: "photo", accessibilityDescription: "图片") ?? NSImage()
         case .file:
             // 如果是单个文件，返回文件图标

@@ -70,11 +70,14 @@ final class ClipboardService: ObservableObject {
 
         lastChangeCount = pasteboard.changeCount
 
-        // 使用 Timer 轮询检测剪贴板变化（2.5秒间隔，平衡响应速度和磁盘写入优化）
-        monitorTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) {
-            [weak self] _ in
+        // 使用 Timer 轮询检测剪贴板变化（0.5秒间隔，与 Alfred / Maccy 同级的即时响应）
+        // macOS 的 NSPasteboard 不提供变更通知，只能轮询 changeCount；0.5s 是社区主流平衡点
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkClipboardChange()
         }
+        // 加入 .common 模式，避免在拖拽 / 滚动面板等 modal 交互时轮询被暂停
+        RunLoop.main.add(timer, forMode: .common)
+        monitorTimer = timer
 
         isMonitoring = true
         print("[ClipboardService] Started monitoring")
@@ -101,21 +104,43 @@ final class ClipboardService: ObservableObject {
         guard currentCount != lastChangeCount else { return }
         lastChangeCount = currentCount
 
-        // 注意：不再检查当前前台应用是否为 LaunchX
-        // 因为截图工具等应用可能在后台运行，而 LaunchX 在前台
-        // 我们仍然需要记录这些截图
-
         // 只检查用户配置的忽略列表中的应用
         if shouldIgnoreCurrentApp() {
             print("[ClipboardService] Ignored clipboard from excluded app")
             return
         }
 
-        // 解析剪贴板内容
-        if let item = parseClipboardContent() {
-            addItem(item)
-            print("[ClipboardService] Added new item: \(item.contentType.displayName)")
+        // 图片解析（PNG 重编码）移到后台线程，避免轮询时阻塞主线程
+        if hasImageInClipboard() {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                if let item = self?.parseClipboardContent() {
+                    DispatchQueue.main.async {
+                        self?.addItem(item)
+                        print("[ClipboardService] Added new item: \(item.contentType.displayName)")
+                    }
+                }
+            }
+        } else {
+            // 非图片内容在主线程直接解析（开销很小）
+            if let item = parseClipboardContent() {
+                addItem(item)
+                print("[ClipboardService] Added new item: \(item.contentType.displayName)")
+            }
         }
+    }
+
+    /// 快速检测剪贴板是否包含图片（不进行完整的图片解析）
+    private func hasImageInClipboard() -> Bool {
+        let types = pasteboard.types ?? []
+        for type in types {
+            let raw = type.rawValue.lowercased()
+            if raw.contains("image") || raw.contains("png") || raw.contains("tiff")
+                || raw.contains("jpeg") || raw.contains("heic")
+            {
+                return true
+            }
+        }
+        return false
     }
 
     /// 检查是否应该忽略当前前台应用
@@ -561,7 +586,7 @@ final class ClipboardService: ObservableObject {
                 // 纯文本模式下不粘贴图片
                 return
             }
-            if let data = item.imageData ?? loadImageFromDisk(id: item.id) {
+            if let data = imageData(for: item) {
                 pasteboard.setData(data, forType: .png)
             }
         case .file:
@@ -580,12 +605,6 @@ final class ClipboardService: ObservableObject {
 
         // 更新 changeCount 避免重复记录
         lastChangeCount = pasteboard.changeCount
-    }
-
-    /// 按需读取图片数据，避免启动时把所有剪贴板图片常驻内存。
-    func imageData(for item: ClipboardItem) -> Data? {
-        guard item.contentType == .image else { return nil }
-        return item.imageData ?? loadImageFromDisk(id: item.id)
     }
 
     /// 模拟 Cmd+V 粘贴（公开方法）
@@ -760,6 +779,8 @@ final class ClipboardService: ObservableObject {
             return
         }
 
+        // 不再在启动时全量加载所有历史图片的 PNG 到内存。
+        // 图片改为按需读取：显示/粘贴时通过 imageData(for:) 经 NSCache → 磁盘懒加载。
         items = loadedItems
         updateTotalSize()
     }
@@ -791,9 +812,35 @@ final class ClipboardService: ObservableObject {
         return try? Data(contentsOf: imageURL)
     }
 
+    // MARK: - 图片懒加载（避免历史图片 PNG 全量常驻内存）
+
+    /// 剪贴板图片内存缓存（有界，系统内存压力时自动淘汰）。
+    private lazy var imageCache: NSCache<NSUUID, NSData> = {
+        let cache = NSCache<NSUUID, NSData>()
+        cache.countLimit = 30  // 最多缓存 30 张图的解码数据
+        return cache
+    }()
+
+    /// 按需获取剪贴板图片数据：内存(item.imageData，刚复制的新图) → NSCache → 磁盘，读后缓存。
+    /// 取代过去 loadItems 时全量预加载所有历史图片到内存的做法（曾造成大量内存常驻）。
+    func imageData(for item: ClipboardItem) -> Data? {
+        guard item.contentType == .image else { return nil }
+        if let data = item.imageData { return data }  // 刚复制的新图仍持有数据
+        let key = item.id as NSUUID
+        if let cached = imageCache.object(forKey: key) {
+            return cached as Data
+        }
+        if let data = loadImageFromDisk(id: item.id) {
+            imageCache.setObject(data as NSData, forKey: key)
+            return data
+        }
+        return nil
+    }
+
     private func deleteImageFromDisk(id: UUID) {
         let imageURL = imagesDir.appendingPathComponent("\(id.uuidString).png")
         try? FileManager.default.removeItem(at: imageURL)
+        imageCache.removeObject(forKey: id as NSUUID)  // 同步清理内存缓存
     }
 
     private func updateTotalSize() {

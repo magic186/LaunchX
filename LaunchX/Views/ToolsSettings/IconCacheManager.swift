@@ -41,6 +41,13 @@ class IconCacheManager {
         }
     }
 
+    /// 移除单个工具的图标缓存（删除工具时调用，避免残留无引用的 NSImage）。
+    func removeIcon(for id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeValue(forKey: id)
+    }
+
     func clearCache() {
         lock.lock()
         defer { lock.unlock() }

@@ -25,6 +25,11 @@ final class ClaudeSkillService: ObservableObject {
         fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills")
     }
 
+    /// ~/.codex/skills/ 目标目录
+    private var codexSkillsDir: URL {
+        store.codexSkillsDir
+    }
+
     /// LaunchX 本地主副本目录
     private var localSkillsDir: URL {
         store.skillsDir
@@ -58,8 +63,8 @@ final class ClaudeSkillService: ObservableObject {
     }
 
     /// 添加自定义仓库
-    func addRepo(owner: String, name: String, branch: String = "main") {
-        let repo = SkillRepo(owner: owner, name: name, branch: branch)
+    func addRepo(owner: String, name: String, branch: String = "main", apps: Set<AppTarget> = [.claude]) {
+        let repo = SkillRepo(owner: owner, name: name, branch: branch, apps: apps)
         if !repos.contains(where: { $0.owner == owner && $0.name == name }) {
             repos.append(repo)
             persistRepos()
@@ -89,13 +94,17 @@ final class ClaudeSkillService: ObservableObject {
     }
 
     /// 从仓库发现可用 Skills（并行请求 + 增量更新）
-    func discoverSkills() async {
+    /// - Parameter appTarget: 只从指定 app 的仓库发现，nil 表示全部
+    func discoverSkills(for appTarget: AppTarget? = nil) async {
         isLoading = true
         defer { isLoading = false }
 
         discoveredSkills = []
 
-        let enabledRepos = repos.filter { $0.isEnabled }
+        var enabledRepos = repos.filter { $0.isEnabled }
+        if let appTarget = appTarget {
+            enabledRepos = enabledRepos.filter { $0.apps.contains(appTarget) }
+        }
         guard !enabledRepos.isEmpty else { return }
 
         await withTaskGroup(of: [DiscoveredSkill].self) { group in
@@ -249,8 +258,8 @@ final class ClaudeSkillService: ObservableObject {
 
     // MARK: - 安装
 
-    /// 安装 Skill
-    func installSkill(_ discovered: DiscoveredSkill) async throws {
+    /// 安装 Skill 到指定 app 目标
+    func installSkill(_ discovered: DiscoveredSkill, for appTarget: AppTarget = .claude) async throws {
         // 去重检查：如果已安装则跳过
         let sanitizedDir = sanitizeDirectory(discovered.directory)
         if skills.contains(where: {
@@ -273,26 +282,30 @@ final class ClaudeSkillService: ObservableObject {
         let skillFile = localDir.appendingPathComponent("SKILL.md")
         try content.write(to: skillFile, atomically: true, encoding: .utf8)
 
-        // 3. symlink 到 ~/.claude/skills/
-        try createSkillLink(sanitizedDir)
-
-        // 4. 记录安装信息
-        let skill = ClaudeSkill(
+        // 3. symlink 到对应应用的 skills 目录
+        let newSkill = ClaudeSkill(
             name: discovered.name,
             skillDescription: discovered.description,
             directory: sanitizedDir,
             repoOwner: discovered.repoOwner,
             repoName: discovered.repoName,
             repoBranch: discovered.repoBranch,
-            isEnabled: true
+            isEnabled: true,
+            apps: [appTarget]
         )
-        skills.append(skill)
+
+        for app in newSkill.apps {
+            let targetBase = app == .claude ? claudeSkillsDir : codexSkillsDir
+            try createSkillLink(sanitizedDir, to: targetBase)
+        }
+
+        // 4. 记录安装信息
+        skills.append(newSkill)
         try persistSkills()
     }
 
-    /// 创建 symlink 或复制到 ~/.claude/skills/
-    private func createSkillLink(_ directory: String) throws {
-        // Sanitize: 去掉开头的 skills/ 前缀，避免嵌套 ~/.claude/skills/skills/xxx
+    /// 创建 symlink 或复制到指定目标目录
+    private func createSkillLink(_ directory: String, to targetBase: URL) throws {
         let sanitizedDir: String
         if directory.hasPrefix("skills/") {
             sanitizedDir = String(directory.dropFirst("skills/".count))
@@ -300,11 +313,11 @@ final class ClaudeSkillService: ObservableObject {
             sanitizedDir = directory
         }
 
-        let targetDir = claudeSkillsDir.appendingPathComponent(sanitizedDir)
+        let targetDir = targetBase.appendingPathComponent(sanitizedDir)
         let sourceDir = localSkillsDir.appendingPathComponent(sanitizedDir)
 
         // 确保目标目录存在
-        try? fileManager.createDirectory(at: claudeSkillsDir, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: targetBase, withIntermediateDirectories: true)
 
         // 如果已存在，先删除
         if fileManager.fileExists(atPath: targetDir.path) {
@@ -327,9 +340,12 @@ final class ClaudeSkillService: ObservableObject {
 
     /// 卸载 Skill
     func uninstallSkill(_ skill: ClaudeSkill) throws {
-        // 1. 删除 ~/.claude/skills/ 中的链接/副本
-        let targetDir = claudeSkillsDir.appendingPathComponent(skill.directory)
-        try? fileManager.removeItem(at: targetDir)
+        // 1. 删除所有同步目录中的链接/副本
+        for app in skill.apps {
+            let targetBase = app == .claude ? claudeSkillsDir : codexSkillsDir
+            let targetDir = targetBase.appendingPathComponent(skill.directory)
+            try? fileManager.removeItem(at: targetDir)
+        }
 
         // 2. 删除本地主副本
         let localDir = localSkillsDir.appendingPathComponent(skill.directory)
@@ -348,10 +364,16 @@ final class ClaudeSkillService: ObservableObject {
         skills[index].isEnabled.toggle()
 
         if skills[index].isEnabled {
-            try createSkillLink(skill.directory)
+            for app in skill.apps {
+                let targetBase = app == .claude ? claudeSkillsDir : codexSkillsDir
+                try createSkillLink(skill.directory, to: targetBase)
+            }
         } else {
-            let targetDir = claudeSkillsDir.appendingPathComponent(skill.directory)
-            try? fileManager.removeItem(at: targetDir)
+            for app in skill.apps {
+                let targetBase = app == .claude ? claudeSkillsDir : codexSkillsDir
+                let targetDir = targetBase.appendingPathComponent(skill.directory)
+                try? fileManager.removeItem(at: targetDir)
+            }
         }
 
         try persistSkills()
@@ -416,12 +438,61 @@ final class ClaudeSkillService: ObservableObject {
         try? persistSkills()
     }
 
+    /// 扫描 ~/.codex/skills/ 中未管理的 Skills
+    func scanUnmanagedCodexSkills() -> [UnmanagedSkill] {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: codexSkillsDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        var unmanaged: [UnmanagedSkill] = []
+        for url in contents {
+            let dirName = url.lastPathComponent
+            if skills.contains(where: { $0.directory == dirName }) { continue }
+
+            let skillFile = url.appendingPathComponent("SKILL.md")
+            if fileManager.fileExists(atPath: skillFile.path) {
+                var name = dirName
+                var desc: String? = nil
+                if let content = try? String(contentsOf: skillFile, encoding: .utf8),
+                   let metadata = parseYAMLFrontmatter(content) {
+                    name = metadata.name ?? name
+                    desc = metadata.description
+                }
+                unmanaged.append(UnmanagedSkill(name: name, description: desc, directory: dirName, url: url))
+            }
+        }
+        return unmanaged
+    }
+
+    /// 从 ~/.codex/skills/ 导入 Skill，标记 apps 为 [.codex]
+    func importCodexSkill(_ unmanaged: UnmanagedSkill) throws {
+        let localDir = localSkillsDir.appendingPathComponent(unmanaged.directory)
+        try? fileManager.createDirectory(at: localDir, withIntermediateDirectories: true)
+        let sourceFile = unmanaged.url.appendingPathComponent("SKILL.md")
+        let targetFile = localDir.appendingPathComponent("SKILL.md")
+        try? fileManager.copyItem(at: sourceFile, to: targetFile)
+
+        let skill = ClaudeSkill(
+            name: unmanaged.name,
+            skillDescription: unmanaged.description,
+            directory: unmanaged.directory,
+            isEnabled: true,
+            apps: [.codex]
+        )
+        skills.append(skill)
+        try? persistSkills()
+    }
+
     // MARK: - 同步
 
-    /// 同步所有已启用的 Skills 到 ~/.claude/skills/
+    /// 同步所有已启用的 Skills 到对应应用目录
     func syncAllEnabled() {
         for skill in skills where skill.isEnabled {
-            try? createSkillLink(skill.directory)
+            for app in skill.apps {
+                let targetBase = app == .claude ? claudeSkillsDir : codexSkillsDir
+                try? createSkillLink(skill.directory, to: targetBase)
+            }
         }
     }
 

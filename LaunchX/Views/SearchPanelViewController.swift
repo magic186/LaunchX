@@ -1,5 +1,26 @@
 import Cocoa
 
+// MARK: - Panel Mode State Machine
+
+/// 面板模式状态机 — 用单一枚举替代 8 个布尔标志，杜绝状态组合爆炸
+enum PanelMode: Equatable {
+    case search                          // 普通搜索
+    case ideProject(path: String, type: IDEType)  // IDE 项目浏览
+    case folderOpen(folder: SearchResult) // 文件夹打开方式
+    case webLinkQuery(result: SearchResult) // 网页直达 Query
+    case utility(identifier: String)     // 实用工具
+    case bookmark                        // 书签搜索
+    case twoFactorAuth                   // 2FA 验证码
+    case claudeCode                      // Claude Code Switcher
+    case codex                           // Codex Switcher
+
+    /// 是否不是普通搜索模式
+    var isExtensionMode: Bool {
+        if case .search = self { return false }
+        return true
+    }
+}
+
 /// Pure AppKit implementation of the search panel - no SwiftUI overhead
 class SearchPanelViewController: NSViewController {
 
@@ -31,43 +52,65 @@ class SearchPanelViewController: NSViewController {
     lazy var searchEngine: SearchEngine = SearchEngine.shared
     var isShowingRecents: Bool = false  // 是否正在显示最近使用
 
-    /// 是否处于任何扩展模式（IDE、文件夹、网页直达、实用工具、书签、2FA、Claude Code等）
-    var isInAnyExtensionMode: Bool {
-        return isInIDEProjectMode || isInFolderOpenMode || isInWebLinkQueryMode || isInUtilityMode
-            || isInBookmarkMode || isIn2FAMode || isInClaudeCodeMode
+    /// 当前面板模式（从旧布尔标志派生的只读视图，用于 resetState 集中清理）
+    var currentMode: PanelMode {
+        if isInIDEProjectMode {
+            return .ideProject(path: currentIDEApp?.path ?? "", type: currentIDEType ?? .vscode)
+        }
+        if isInFolderOpenMode, let folder = currentFolder {
+            return .folderOpen(folder: folder)
+        }
+        if isInWebLinkQueryMode, let result = currentWebLinkResult {
+            return .webLinkQuery(result: result)
+        }
+        if isInUtilityMode {
+            return .utility(identifier: currentUtilityIdentifier ?? "")
+        }
+        if isInBookmarkMode { return .bookmark }
+        if isIn2FAMode { return .twoFactorAuth }
+        if isInClaudeCodeMode { return .claudeCode }
+        if isInCodexMode { return .codex }
+        return .search
     }
 
-    // IDE 项目模式状态
+    /// 是否处于任何扩展模式（代理到状态机）
+    var isInAnyExtensionMode: Bool { currentMode.isExtensionMode }
+
+    // MARK: - 旧布尔标志（保留为存储属性，Modes.swift 有 29 处直接赋值）
+
     var isInIDEProjectMode: Bool = false
+    var isInFolderOpenMode: Bool = false
+    var isInWebLinkQueryMode: Bool = false
+    var isInUtilityMode: Bool = false
+    var isInBookmarkMode: Bool = false
+    var isIn2FAMode: Bool = false
+    var isInClaudeCodeMode: Bool = false
+    var isInCodexMode: Bool = false
+
+    // IDE 项目模式状态
     var currentIDEApp: SearchResult? = nil
     var currentIDEType: IDEType? = nil
     var ideProjects: [IDEProject] = []
     var filteredIDEProjects: [IDEProject] = []
 
     // 文件夹打开方式选择模式状态
-    var isInFolderOpenMode: Bool = false
     var currentFolder: SearchResult? = nil
     var folderOpeners: [IDERecentProjectsService.FolderOpenerApp] = []
 
     // 网页直达 Query 模式状态
-    var isInWebLinkQueryMode: Bool = false
     var currentWebLinkResult: SearchResult? = nil
 
     // 实用工具模式状态
-    var isInUtilityMode: Bool = false
     var currentUtilityIdentifier: String? = nil
     var currentUtilityResult: SearchResult? = nil
 
     // 书签搜索模式状态
-    var isInBookmarkMode: Bool = false
     var bookmarkResults: [BookmarkItem] = []
 
     // 2FA 短信模式状态
-    var isIn2FAMode: Bool = false
     var twoFAResults: [TwoFactorCodeItem] = []
 
-    // Claude Code Switcher 模式状态
-    var isInClaudeCodeMode: Bool = false
+    // Claude Code / Codex 模式无特殊数据（布尔标志已由状态机涵盖）
 
     // IP 查询结果
     var ipQueryResults: [(label: String, ip: String)] = []
@@ -84,6 +127,9 @@ class SearchPanelViewController: NSViewController {
     var uuidUppercase: Bool = true  // 是否大写
     var uuidCount: Int = 1  // 生成数量
     var generatedUUIDs: [String] = []  // 生成的 UUID 列表
+    var searchDebounceWorkItem: DispatchWorkItem?  // 搜索防抖（合并快速连续输入）
+    var searchGeneration: UInt = 0  // 异步搜索代际，用于丢弃过期结果
+
     var uuidDebounceWorkItem: DispatchWorkItem?  // UUID 生成防抖
 
     // UUID 生成器 UI 组件
@@ -364,6 +410,14 @@ class SearchPanelViewController: NSViewController {
             object: nil
         )
 
+        // 监听直接进入 Codex 模式的通知（由快捷键触发）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleEnterCodexModeDirectly),
+            name: .enterCodexModeDirectly,
+            object: nil
+        )
+
         // 监听提醒事项变更
         NotificationCenter.default.addObserver(
             self,
@@ -472,89 +526,81 @@ class SearchPanelViewController: NSViewController {
     }
 
     func resetState() {
-        // ⚠️ 重要：添加新的扩展模式时，必须在此处添加清理逻辑，否则面板隐藏后状态不会被重置
-
         // 清理计算器
         clearCalculatorResult()
 
         // 隐藏快捷操作面板
         hideQuickActions()
 
-        // 如果在 IDE 项目模式，先恢复普通模式 UI
-        if isInIDEProjectMode {
-            isInIDEProjectMode = false
+        // 状态机驱动清理：根据当前模式清理关联数据并恢复 UI
+        switch currentMode {
+        case .ideProject:
             currentIDEApp = nil
             currentIDEType = nil
             ideProjects = []
             filteredIDEProjects = []
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在文件夹打开模式，先恢复普通模式 UI
-        if isInFolderOpenMode {
-            isInFolderOpenMode = false
+        case .folderOpen:
             currentFolder = nil
             folderOpeners = []
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在网页直达 Query 模式，先恢复普通模式 UI
-        if isInWebLinkQueryMode {
-            isInWebLinkQueryMode = false
+        case .webLinkQuery:
             currentWebLinkResult = nil
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在实用工具模式，先恢复普通模式 UI
-        if isInUtilityMode {
-            isInUtilityMode = false
+        case .utility:
             currentUtilityIdentifier = nil
             currentUtilityResult = nil
             ipQueryResults = []
-            // 清理 UUID 模式数据
             generatedUUIDs = []
             uuidOptionsView.isHidden = true
-            // 清理 URL 编码解码模式数据
             urlCoderView.isHidden = true
             decodedURLTextView.string = ""
             encodedURLTextView.string = ""
-            // 清理 Base64 编码解码模式数据
             base64CoderView.isHidden = true
             originalTextView.string = ""
             base64TextView.string = ""
             restoreNormalModeUI()
             searchField.isHidden = false
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在书签模式，先恢复普通模式 UI
-        if isInBookmarkMode {
-            isInBookmarkMode = false
+        case .bookmark:
             bookmarkResults = []
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在 2FA 模式，先恢复普通模式 UI
-        if isIn2FAMode {
-            isIn2FAMode = false
+        case .twoFactorAuth:
             twoFAResults = []
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
-        }
 
-        // 如果在 Claude Code 模式，先恢复普通模式 UI
-        if isInClaudeCodeMode {
-            isInClaudeCodeMode = false
+        case .claudeCode:
             restoreNormalModeUI()
             setPlaceholder("搜索应用或文档...")
+
+        case .codex:
+            restoreNormalModeUI()
+            setPlaceholder("搜索应用或文档...")
+
+        case .search:
+            // 普通模式无需特殊清理
+            break
         }
 
-        // 重置计算器状态
-        clearCalculatorResult()
+        // 退出扩展模式（清除所有布尔标志）
+        isInIDEProjectMode = false
+        isInFolderOpenMode = false
+        isInWebLinkQueryMode = false
+        isInUtilityMode = false
+        isInBookmarkMode = false
+        isIn2FAMode = false
+        isInClaudeCodeMode = false
+        isInCodexMode = false
 
         searchField.stringValue = ""
         selectedIndex = 0

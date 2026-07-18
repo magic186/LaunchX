@@ -142,7 +142,7 @@ extension BackupModel {
         // 还原 MCP 服务器配置（仅当备份中包含时）
         if let mcpServers {
             try? ClaudeDataStore.shared.saveMcpServers(mcpServers)
-            try? ClaudeMcpService.shared.syncToClaude()
+            try? ClaudeMcpService.shared.syncAll()
         }
 
         // 保存 snippets 数组到文件

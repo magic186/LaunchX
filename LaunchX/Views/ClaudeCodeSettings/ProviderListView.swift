@@ -5,7 +5,6 @@ struct ProviderListView: View {
     @StateObject private var service = ClaudeProviderService.shared
     @State private var showingAddSheet = false
     @State private var editingProvider: ClaudeProvider?
-    @State private var showingPresetPicker = false
     @State private var showError = false
     @State private var errorMessage = ""
 
@@ -16,17 +15,10 @@ struct ProviderListView: View {
                 Text("Provider 管理")
                     .font(.headline)
                 Spacer()
-                Button(action: { showingPresetPicker = true }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                        Text("从预设添加")
-                    }
-                    .font(.system(size: 12))
-                }
                 Button(action: { showingAddSheet = true }) {
                     HStack(spacing: 4) {
-                        Image(systemName: "plus.circle")
-                        Text("自定义")
+                        Image(systemName: "plus")
+                        Text("添加")
                     }
                     .font(.system(size: 12))
                 }
@@ -36,7 +28,9 @@ struct ProviderListView: View {
 
             Divider()
 
-            if service.providers.isEmpty {
+            let claudeProviders = service.providers.filter { $0.apps.contains(.claude) }
+
+            if claudeProviders.isEmpty {
                 // 空状态
                 VStack(spacing: 12) {
                     Spacer()
@@ -45,7 +39,7 @@ struct ProviderListView: View {
                         .foregroundColor(.secondary)
                     Text("暂无 Provider")
                         .foregroundColor(.secondary)
-                    Text("点击「从预设添加」快速创建，或「自定义」手动配置")
+                    Text("点击「添加」手动配置 Provider")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     Spacer()
@@ -55,7 +49,7 @@ struct ProviderListView: View {
                 // Provider 列表
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(service.providers) { provider in
+                        ForEach(claudeProviders) { provider in
                             ProviderRowView(
                                 provider: provider,
                                 isCurrent: provider.isCurrent,
@@ -81,9 +75,6 @@ struct ProviderListView: View {
                 ),
                 editingProvider: provider
             )
-        }
-        .sheet(isPresented: $showingPresetPicker) {
-            ProviderPresetView(isPresented: $showingPresetPicker)
         }
         .alert("错误", isPresented: $showError) {
             Button("确定", role: .cancel) {}
